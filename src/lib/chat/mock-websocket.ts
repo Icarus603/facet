@@ -1,6 +1,7 @@
 'use client'
 
-import { AgentType, WebSocketMessage } from '@/types/chat'
+import { AgentType } from '../agents/agent-types'
+import { ChatWebSocketMessage } from './types'
 
 // Mock WebSocket for development/testing
 export class MockWebSocket {
@@ -29,7 +30,7 @@ export class MockWebSocket {
 
   private userId: string
   private sessionId: string
-  private messageQueue: WebSocketMessage[] = []
+  private messageQueue: ChatWebSocketMessage[] = []
   private currentAgent: AgentType = 'therapy_coordinator'
   
   constructor(userId: string, sessionId?: string) {

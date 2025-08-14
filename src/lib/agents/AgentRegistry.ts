@@ -11,13 +11,16 @@ import { MindfulnessAgent } from './MindfulnessAgent';
 import { FamilyTherapyAgent } from './FamilyTherapyAgent';
 import { ProgressTrackingAgent } from './ProgressTrackingAgent';
 import { TherapeuticAgent, AgentInteraction, AgentCollaboration } from './types';
+import { FACETOrchestrationSystem } from './orchestration';
 
 export class AgentRegistry {
   private agents: Map<string, BaseAgent> = new Map();
   private agentCollaborations: AgentCollaboration[] = [];
+  private orchestrationSystem?: FACETOrchestrationSystem;
 
   constructor() {
     this.initializeAgents();
+    this.initializeOrchestration();
   }
 
   /**
@@ -38,6 +41,18 @@ export class AgentRegistry {
     });
 
     console.log(`Initialized ${this.agents.size} therapeutic agents`);
+  }
+
+  /**
+   * Initialize orchestration system
+   */
+  private initializeOrchestration(): void {
+    try {
+      this.orchestrationSystem = FACETOrchestrationSystem.getInstance(this);
+      console.log('FACET Orchestration System initialized');
+    } catch (error) {
+      console.error('Failed to initialize orchestration system:', error);
+    }
   }
 
   /**
@@ -78,9 +93,112 @@ export class AgentRegistry {
   }
 
   /**
-   * Route user input to appropriate agent(s)
+   * Process therapeutic interaction through agent orchestration
+   */
+  async processTherapeuticInteraction(params: {
+    userId: string;
+    sessionId: string;
+    userInput: string;
+    culturalContext?: any;
+    urgencyLevel?: 'low' | 'medium' | 'high' | 'critical';
+  }) {
+    const startTime = Date.now();
+    
+    try {
+      // Route to appropriate agent based on input and context
+      const routingResult = await this.routeInteraction(
+        params.userInput,
+        params.culturalContext,
+        params.sessionId
+      );
+
+      if (!routingResult.agent) {
+        throw new Error('No suitable agent found for interaction');
+      }
+
+      // Process through selected agent
+      const response = await routingResult.agent.processUserInput(
+        params.userInput,
+        {
+          userId: params.userId,
+          sessionId: params.sessionId,
+          culturalContext: params.culturalContext,
+          urgencyLevel: params.urgencyLevel || 'medium'
+        }
+      );
+
+      const processingTime = Date.now() - startTime;
+
+      return {
+        content: response.response,
+        agentId: routingResult.agent['agent'].id,
+        agentName: routingResult.agent['agent'].name,
+        agentType: routingResult.agent['agent'].type,
+        culturalContent: response.cultural_content_used || [],
+        suggestedActions: response.suggested_actions || [],
+        emotionalAnalysis: response.emotional_analysis || {},
+        processingTime,
+        coordinationEvents: response.coordination_events || []
+      };
+      
+    } catch (error) {
+      console.error('ProcessTherapeuticInteraction error:', error);
+      
+      // Fallback to basic response
+      return {
+        content: "I understand you're reaching out. While I'm experiencing some technical difficulties right now, I want you to know that your wellbeing is important. Can you tell me a bit more about what's on your mind?",
+        agentId: 'fallback_agent',
+        agentName: 'FACET Support',
+        agentType: 'fallback',
+        culturalContent: [],
+        suggestedActions: ['Try rephrasing your message', 'Contact support if issues persist'],
+        emotionalAnalysis: {},
+        processingTime: Date.now() - startTime,
+        coordinationEvents: [{ type: 'fallback_triggered', reason: error.message }]
+      };
+    }
+  }
+
+  /**
+   * Route user input to appropriate agent(s) using enhanced orchestration
    */
   async routeInteraction(
+    userInput: string,
+    context: Record<string, any>,
+    sessionId: string,
+    userId: string
+  ): Promise<AgentInteraction[]> {
+    // Use orchestration system if available
+    if (this.orchestrationSystem) {
+      try {
+        const orchestrationContext = {
+          sessionId,
+          userId,
+          userInput,
+          culturalContext: context.cultural_background || context.culturalContext,
+          sessionHistory: context.sessionHistory || [],
+          urgencyLevel: this.detectUrgencyLevel(userInput, context),
+          requiredCapabilities: context.requiredCapabilities,
+          excludedAgents: context.excludedAgents,
+          maxResponseTime: context.maxResponseTime,
+          preferredAgent: context.preferredAgent
+        };
+
+        return await this.orchestrationSystem.getOrchestrator().orchestrate(orchestrationContext);
+      } catch (error) {
+        console.error('Orchestration failed, falling back to legacy routing:', error);
+        // Fall back to legacy routing
+      }
+    }
+
+    // Legacy routing fallback
+    return this.legacyRouteInteraction(userInput, context, sessionId, userId);
+  }
+
+  /**
+   * Legacy routing method (original implementation)
+   */
+  private async legacyRouteInteraction(
     userInput: string,
     context: Record<string, any>,
     sessionId: string,
@@ -355,6 +473,98 @@ export class AgentRegistry {
     return this.agentCollaborations
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
       .slice(0, limit);
+  }
+
+  /**
+   * Detect urgency level from user input and context
+   */
+  private detectUrgencyLevel(userInput: string, context: Record<string, any>): 'low' | 'medium' | 'high' | 'critical' {
+    const input = userInput.toLowerCase();
+    
+    // Critical urgency indicators
+    const criticalKeywords = [
+      'suicide', 'kill myself', 'end it all', 'hurt myself', 'self-harm',
+      'overdose', 'emergency', 'crisis', 'can\'t take it anymore'
+    ];
+    
+    if (criticalKeywords.some(keyword => input.includes(keyword))) {
+      return 'critical';
+    }
+
+    // High urgency indicators
+    const highKeywords = [
+      'panic', 'anxiety attack', 'breakdown', 'desperate', 'urgent',
+      'immediate help', 'right now', 'can\'t cope'
+    ];
+    
+    if (highKeywords.some(keyword => input.includes(keyword))) {
+      return 'high';
+    }
+
+    // Medium urgency indicators
+    const mediumKeywords = [
+      'stressed', 'worried', 'anxious', 'depressed', 'sad',
+      'help me', 'struggling', 'difficult time'
+    ];
+    
+    if (mediumKeywords.some(keyword => input.includes(keyword))) {
+      return 'medium';
+    }
+
+    // Check context for urgency indicators
+    if (context.previousCrisis || context.riskFactors) {
+      return 'high';
+    }
+
+    return 'low';
+  }
+
+  /**
+   * Get orchestration system status
+   */
+  getOrchestrationStatus(): any {
+    if (!this.orchestrationSystem) {
+      return { available: false, message: 'Orchestration system not initialized' };
+    }
+
+    try {
+      return {
+        available: true,
+        status: this.orchestrationSystem.getSystemStatus(),
+        components: {
+          orchestrator: 'active',
+          router: 'active',
+          monitor: 'active',
+          workflow: 'active'
+        }
+      };
+    } catch (error) {
+      return { 
+        available: false, 
+        error: error instanceof Error ? error.message : 'Unknown error',
+        message: 'Failed to get orchestration status'
+      };
+    }
+  }
+
+  /**
+   * Get enhanced agent statistics including orchestration metrics
+   */
+  getEnhancedAgentStats(): any {
+    const basicStats = this.getAgentStats();
+    const orchestrationStatus = this.getOrchestrationStatus();
+
+    return {
+      ...basicStats,
+      orchestration: orchestrationStatus,
+      enhanced_features: {
+        intelligent_routing: orchestrationStatus.available,
+        performance_monitoring: orchestrationStatus.available,
+        agent_collaboration: orchestrationStatus.available,
+        cultural_matching: orchestrationStatus.available,
+        crisis_protocols: orchestrationStatus.available
+      }
+    };
   }
 }
 

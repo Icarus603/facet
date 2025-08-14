@@ -324,27 +324,37 @@ export default function ArtTherapyCanvas({
               <span className="text-sm text-gray-600 min-w-0">{brushSize}px</span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               <span className="text-sm font-medium">Color:</span>
-              <div className="flex gap-1">
+              <div className="flex gap-2">
                 {colors.map(color => (
                   <button
                     key={color}
                     onClick={() => setBrushColor(color)}
-                    className={`w-6 h-6 rounded border-2 ${
-                      brushColor === color ? 'border-gray-800' : 'border-gray-300'
+                    className={`w-8 h-8 rounded-full border-3 transition-all duration-200 hover:scale-110 ${
+                      brushColor === color 
+                        ? 'border-gray-800 shadow-lg ring-2 ring-gray-300' 
+                        : 'border-white shadow-md hover:border-gray-400'
                     }`}
                     style={{ backgroundColor: color }}
                     title={color}
                   />
                 ))}
-                <input
-                  type="color"
-                  value={brushColor}
-                  onChange={(e) => setBrushColor(e.target.value)}
-                  className="w-6 h-6 rounded border border-gray-300"
-                  title="Custom color"
-                />
+                <div className="relative">
+                  <input
+                    type="color"
+                    value={brushColor}
+                    onChange={(e) => setBrushColor(e.target.value)}
+                    className="w-8 h-8 rounded-full border-3 border-white shadow-md cursor-pointer opacity-0 absolute inset-0"
+                    title="Custom color"
+                  />
+                  <div 
+                    className="w-8 h-8 rounded-full border-3 border-white shadow-md cursor-pointer flex items-center justify-center text-white text-xs font-bold"
+                    style={{ backgroundColor: brushColor }}
+                  >
+                    +
+                  </div>
+                </div>
               </div>
             </div>
 
