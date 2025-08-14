@@ -32,15 +32,15 @@ export default function HomePage() {
           </p>
           
           {/* Call to action */}
-          <div className="mb-10 flex flex-col sm:flex-row gap-4 justify-center">
+          <div className="mb-10 flex flex-col sm:flex-row gap-4 justify-center sm:items-center">
             <Link href="/auth/signin">
-              <Button className="facet-button-primary text-base px-8 py-3 h-auto rounded-xl shadow-lg">
+              <Button className="facet-button-primary text-base px-8 py-3 h-12 rounded-xl shadow-lg flex items-center justify-center">
                 <ChatBubbleLeftRightIcon className="w-4 h-4 mr-2" />
                 Start Therapy Session
               </Button>
             </Link>
             <Link href="/auth/signin">
-              <Button variant="outline" className="text-base px-8 py-3 h-auto rounded-xl border-facet-wine text-facet-wine hover:bg-facet-wine hover:text-white">
+              <Button variant="outline" className="text-base px-8 py-3 h-12 rounded-xl border-facet-wine text-facet-wine hover:bg-facet-wine hover:text-white flex items-center justify-center">
                 Login
                 <ArrowRightIcon className="w-4 h-4 ml-2" />
               </Button>
