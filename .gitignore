@@ -3,6 +3,14 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# Next.js
+/.next/
+/out/
+next-env.d.ts
 
 # Environment variables
 .env
@@ -23,6 +31,21 @@ pids
 
 # Coverage directory used by tools like istanbul
 coverage/
+
+# Testing
+/coverage
+
+# Production
+/build
+
+# Vercel
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+
+# Prisma
+prisma/migrations/
 
 # OS generated files
 .DS_Store
@@ -47,3 +70,24 @@ Thumbs.db
 dist/
 build/
 *.tgz
+
+# Cache directories
+.cache
+.parcel-cache
+.npm
+.eslintcache
+
+# Database files
+*.sqlite
+*.sqlite3
+*.db
+
+# Temporary files
+*.tmp
+*.temp
+
+# Optional npm cache directory
+.npm
+
+# Yarn Integrity file
+.yarn-integrity
