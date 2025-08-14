@@ -1,5 +1,8 @@
-import { createClient } from '@/lib/supabase/server'
-import { redirect } from 'next/navigation'
+'use client'
+
+import { createClient } from '@/lib/supabase/client'
+import { useRouter } from 'next/navigation'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { CreativeExpressionTools } from '@/components/creative'
 import { FacetLogo } from '@/components/ui/facet-logo'
@@ -22,13 +25,38 @@ interface CreativePageProps {
   searchParams: { session_id?: string }
 }
 
-export default async function CreativePage({ searchParams }: CreativePageProps) {
+export default function CreativePage({ searchParams }: CreativePageProps) {
+  const [session, setSession] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const router = useRouter()
   const supabase = createClient()
-  
-  const { data: { session } } = await supabase.auth.getSession()
-  
+
+  useEffect(() => {
+    const getSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session) {
+        router.push('/auth/signin')
+        return
+      }
+      
+      setSession(session)
+      setLoading(false)
+    }
+
+    getSession()
+  }, [supabase, router])
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-8 w-8 border-4 border-facet-blue/20 border-t-facet-blue"></div>
+      </div>
+    )
+  }
+
   if (!session) {
-    redirect('/auth/signin')
+    return null
   }
 
   const sessionId = searchParams.session_id

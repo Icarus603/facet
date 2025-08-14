@@ -46,13 +46,6 @@ function SignInContent() {
     setMessage('')
 
     try {
-      // In demo mode, simulate successful signin
-      if (process.env.NODE_ENV === 'development') {
-        await new Promise(resolve => setTimeout(resolve, 800))
-        setMessage('Demo mode: Sign in successful! Redirecting...')
-        setTimeout(() => router.push(redirectedFrom || '/dashboard'), 1500)
-        return
-      }
 
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
@@ -69,8 +62,7 @@ function SignInContent() {
         router.push(redirectedFrom || '/dashboard')
       }
     } catch (err) {
-      setMessage('Demo mode: Redirecting to dashboard...')
-      setTimeout(() => router.push(redirectedFrom || '/dashboard'), 1500)
+      setError('Authentication failed. Please check your credentials.')
     } finally {
       setLoading(false)
     }
@@ -83,13 +75,6 @@ function SignInContent() {
     setMessage('')
 
     try {
-      // In demo mode, simulate successful signup
-      if (process.env.NODE_ENV === 'development') {
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        setMessage('Demo mode: Account created successfully! Redirecting...')
-        setTimeout(() => router.push(redirectedFrom || '/dashboard'), 1500)
-        return
-      }
 
       const { error } = await supabase.auth.signUp({
         email,
@@ -106,8 +91,7 @@ function SignInContent() {
 
       setMessage('Check your email for the confirmation link!')
     } catch (err) {
-      setError('Demo mode: Redirecting to dashboard...')
-      setTimeout(() => router.push(redirectedFrom || '/dashboard'), 1500)
+      setError('Sign up failed. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -118,13 +102,6 @@ function SignInContent() {
     setError('')
 
     try {
-      // In demo mode, simulate successful Google signin
-      if (process.env.NODE_ENV === 'development') {
-        await new Promise(resolve => setTimeout(resolve, 1200))
-        setMessage('Demo mode: Google sign in successful! Redirecting...')
-        setTimeout(() => router.push(redirectedFrom || '/dashboard'), 1500)
-        return
-      }
 
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
@@ -137,8 +114,7 @@ function SignInContent() {
         setError(error.message)
       }
     } catch (err) {
-      setMessage('Demo mode: Redirecting to dashboard...')
-      setTimeout(() => router.push(redirectedFrom || '/dashboard'), 1500)
+      setError('Google sign in failed. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -179,7 +155,8 @@ function SignInContent() {
             <Button
               onClick={handleGoogleSignIn}
               disabled={loading}
-              className="w-full h-10 bg-facet-gradient hover:opacity-90 text-white font-medium text-sm shadow-lg transition-all duration-200 hover:shadow-xl"
+              className="w-full h-10 hover:opacity-90 text-white font-medium text-sm shadow-lg transition-all duration-200 hover:shadow-xl"
+              style={{ backgroundColor: '#73001C' }}
             >
               <svg className="w-5 h-5 mr-3" viewBox="0 0 24 24">
                 <path
@@ -256,7 +233,8 @@ function SignInContent() {
 
               <Button 
                 type="submit" 
-                className="w-full h-9 facet-button-primary text-sm font-medium"
+                className="w-full h-9 text-sm font-medium text-white"
+                style={{ backgroundColor: '#0D4279' }}
                 disabled={loading}
               >
                 {loading 

@@ -1,11 +1,12 @@
-import { createMiddlewareClient } from '@supabase/auth-helpers-nextjs'
-import { NextResponse } from 'next/server'
-import type { NextRequest } from 'next/server'
+import { createServerClient } from '@supabase/ssr'
+import { NextResponse, type NextRequest } from 'next/server'
 import type { Database } from './lib/supabase/database.types'
 
-export async function middleware(req: NextRequest) {
-  const res = NextResponse.next()
-  
+export async function middleware(request: NextRequest) {
+  let supabaseResponse = NextResponse.next({
+    request,
+  })
+
   // Check if Supabase is properly configured
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -15,16 +16,37 @@ export async function middleware(req: NextRequest) {
       supabaseAnonKey === 'your-supabase-anon-key') {
     // Supabase not configured - skip auth middleware in development
     console.warn('Supabase not configured - skipping auth middleware')
-    return res
+    return supabaseResponse
   }
-  
-  // Create a Supabase client configured to use cookies
-  const supabase = createMiddlewareClient<Database>({ req, res })
 
-  // Refresh session if expired - required for Server Components
+  const supabase = createServerClient<Database>(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll()
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
+          supabaseResponse = NextResponse.next({
+            request,
+          })
+          cookiesToSet.forEach(({ name, value, options }) =>
+            supabaseResponse.cookies.set(name, value, options)
+          )
+        },
+      },
+    }
+  )
+
+  // IMPORTANT: Avoid writing any logic between createServerClient and
+  // supabase.auth.getUser(). A simple mistake could make it very hard to debug
+  // issues with users being randomly logged out.
+
   const {
-    data: { session },
-  } = await supabase.auth.getSession()
+    data: { user },
+  } = await supabase.auth.getUser()
 
   // Protected routes configuration
   const protectedRoutes = ['/dashboard', '/therapy', '/profile', '/admin']
@@ -33,49 +55,49 @@ export async function middleware(req: NextRequest) {
   const professionalRoutes = ['/professional']
   
   const isProtectedRoute = protectedRoutes.some(route => 
-    req.nextUrl.pathname.startsWith(route)
+    request.nextUrl.pathname.startsWith(route)
   )
   
   // Redirect unauthenticated users to sign in
-  if (isProtectedRoute && !session) {
-    const redirectUrl = new URL('/auth/signin', req.url)
-    redirectUrl.searchParams.set('redirectedFrom', req.nextUrl.pathname)
+  if (isProtectedRoute && !user) {
+    const redirectUrl = new URL('/auth/signin', request.url)
+    redirectUrl.searchParams.set('redirectedFrom', request.nextUrl.pathname)
     return NextResponse.redirect(redirectUrl)
   }
 
   // Role-based access control
-  if (session) {
+  if (user) {
     const { data: profile } = await supabase
       .from('users')
       .select('profile')
-      .eq('id', session.user.id)
+      .eq('id', user.id)
       .single()
 
     const userRole = profile?.profile?.role || 'user'
 
     // Admin route protection
-    if (adminRoutes.some(route => req.nextUrl.pathname.startsWith(route))) {
+    if (adminRoutes.some(route => request.nextUrl.pathname.startsWith(route))) {
       if (userRole !== 'admin') {
-        return NextResponse.redirect(new URL('/dashboard', req.url))
+        return NextResponse.redirect(new URL('/dashboard', request.url))
       }
     }
 
     // Crisis responder route protection
-    if (crisisRoutes.some(route => req.nextUrl.pathname.startsWith(route))) {
+    if (crisisRoutes.some(route => request.nextUrl.pathname.startsWith(route))) {
       if (userRole !== 'crisis_responder' && userRole !== 'admin') {
-        return NextResponse.redirect(new URL('/dashboard', req.url))
+        return NextResponse.redirect(new URL('/dashboard', request.url))
       }
     }
 
     // Professional route protection
-    if (professionalRoutes.some(route => req.nextUrl.pathname.startsWith(route))) {
+    if (professionalRoutes.some(route => request.nextUrl.pathname.startsWith(route))) {
       if (userRole !== 'professional' && userRole !== 'admin') {
-        return NextResponse.redirect(new URL('/dashboard', req.url))
+        return NextResponse.redirect(new URL('/dashboard', request.url))
       }
     }
   }
 
-  return res
+  return supabaseResponse
 }
 
 export const config = {

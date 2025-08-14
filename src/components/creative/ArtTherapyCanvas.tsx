@@ -11,7 +11,7 @@ import {
   BookmarkIcon,
   SparklesIcon,
   PaintBrushIcon,
-  EllipseHorizontalIcon,
+  EllipsisHorizontalIcon,
   RectangleStackIcon
 } from '@heroicons/react/24/outline'
 
@@ -292,7 +292,7 @@ export default function ArtTherapyCanvas({
                 {[
                   { name: 'brush', icon: PaintBrushIcon, label: 'Brush' },
                   { name: 'eraser', icon: TrashIcon, label: 'Eraser' },
-                  { name: 'circle', icon: EllipseHorizontalIcon, label: 'Circle' },
+                  { name: 'circle', icon: EllipsisHorizontalIcon, label: 'Circle' },
                   { name: 'square', icon: RectangleStackIcon, label: 'Square' }
                 ].map(({ name, icon: Icon, label }) => (
                   <button
