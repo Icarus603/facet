@@ -66,7 +66,6 @@ export function useAuth() {
       // Create mental health profile
       await supabase.from('user_mental_health_profiles').insert({
         user_id: data.user.id,
-        initial_assessment_completed: false,
       })
     }
     
