@@ -1,25 +1,14 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
-import type { Database } from './lib/supabase/database.types'
 
 export async function middleware(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({
-    request,
+  let response = NextResponse.next({
+    request: {
+      headers: request.headers,
+    },
   })
 
-  // Check if Supabase is properly configured
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  
-  if (!supabaseUrl || !supabaseAnonKey || 
-      supabaseUrl === 'your-supabase-url' || 
-      supabaseAnonKey === 'your-supabase-anon-key') {
-    // Supabase not configured - skip auth middleware in development
-    console.warn('Supabase not configured - skipping auth middleware')
-    return supabaseResponse
-  }
-
-  const supabase = createServerClient<Database>(
+  const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
@@ -28,76 +17,49 @@ export async function middleware(request: NextRequest) {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
-          supabaseResponse = NextResponse.next({
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
+          response = NextResponse.next({
             request,
           })
           cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
+            response.cookies.set(name, value, options)
           )
         },
       },
     }
   )
 
-  // IMPORTANT: Avoid writing any logic between createServerClient and
-  // supabase.auth.getUser(). A simple mistake could make it very hard to debug
-  // issues with users being randomly logged out.
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  // Protected routes configuration
-  const protectedRoutes = ['/dashboard', '/therapy', '/profile', '/admin']
-  const adminRoutes = ['/admin']
-  const crisisRoutes = ['/crisis']
-  const professionalRoutes = ['/professional']
+  // This will refresh session if expired - required for Server Components
+  const { data: { user } } = await supabase.auth.getUser()
   
-  const isProtectedRoute = protectedRoutes.some(route => 
-    request.nextUrl.pathname.startsWith(route)
-  )
-  
-  // Redirect unauthenticated users to sign in
-  if (isProtectedRoute && !user) {
-    const redirectUrl = new URL('/auth/signin', request.url)
-    redirectUrl.searchParams.set('redirectedFrom', request.nextUrl.pathname)
-    return NextResponse.redirect(redirectUrl)
+  const isAuthPage = request.nextUrl.pathname.startsWith('/auth')
+  const isPublicPage = request.nextUrl.pathname === '/' || request.nextUrl.pathname.startsWith('/about')
+  const isProtectedPage = !isAuthPage && !isPublicPage
+
+  // Redirect authenticated users away from auth pages
+  if (user && isAuthPage) {
+    return NextResponse.redirect(new URL('/dashboard', request.url))
   }
 
-  // Role-based access control
-  if (user) {
+  // Redirect unauthenticated users to auth
+  if (!user && isProtectedPage) {
+    return NextResponse.redirect(new URL('/auth/signin', request.url))
+  }
+
+  // Check if user needs onboarding
+  if (user && !isAuthPage) {
     const { data: profile } = await supabase
-      .from('users')
-      .select('profile')
-      .eq('id', user.id)
+      .from('user_mental_health_profiles')
+      .select('initial_assessment_completed')
+      .eq('user_id', user.id)
       .single()
 
-    const userRole = profile?.profile?.role || 'user'
-
-    // Admin route protection
-    if (adminRoutes.some(route => request.nextUrl.pathname.startsWith(route))) {
-      if (userRole !== 'admin') {
-        return NextResponse.redirect(new URL('/dashboard', request.url))
-      }
-    }
-
-    // Crisis responder route protection
-    if (crisisRoutes.some(route => request.nextUrl.pathname.startsWith(route))) {
-      if (userRole !== 'crisis_responder' && userRole !== 'admin') {
-        return NextResponse.redirect(new URL('/dashboard', request.url))
-      }
-    }
-
-    // Professional route protection
-    if (professionalRoutes.some(route => request.nextUrl.pathname.startsWith(route))) {
-      if (userRole !== 'professional' && userRole !== 'admin') {
-        return NextResponse.redirect(new URL('/dashboard', request.url))
-      }
+    if (!profile?.initial_assessment_completed && request.nextUrl.pathname !== '/onboarding') {
+      return NextResponse.redirect(new URL('/onboarding', request.url))
     }
   }
 
-  return supabaseResponse
+  return response
 }
 
 export const config = {
@@ -107,8 +69,8 @@ export const config = {
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
-     * - public folder
+     * Feel free to modify this pattern to include more paths.
      */
-    '/((?!_next/static|_next/image|favicon.ico|public|api).*)',
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }

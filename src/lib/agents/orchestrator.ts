@@ -1,942 +1,576 @@
-/**
- * FACET Agent Orchestrator
- * Main coordination engine for therapy agent interactions
- */
+import { AgentType, WorkflowMode, AgentResponse, UserContext, Message } from '@/lib/types/agent'
+import { SmartRouter } from './smart-router'
+import { EmotionAnalyzer } from './emotion-analyzer'
+import { MemoryManager } from '@/lib/memory/memory-manager'
+import { createClient } from '@/lib/supabase/client'
+import { MemoryType } from '@/lib/types/memory'
 
-import { EventEmitter } from 'events';
-import { nanoid } from 'nanoid';
-import { PrismaClient } from '@prisma/client';
-import {
-  AgentType,
-  AgentConfig,
-  OrchestratorConfig,
-  UserMessage,
-  TherapyResponse,
-  AgentResponse,
-  CoordinatedResponse,
-  TherapyTask,
-  AgentContext,
-  AgentMessage,
-  FallbackResponse,
-  CoordinationStrategy,
-  generateCorrelationId,
-  isHighPriorityTask,
-  requiresImmediateAttention,
-  calculateCoordinationTimeout,
-} from './agent-types';
-import { BaseAgent } from './base-agent';
-import { RedisCoordinator } from './coordination/redis-coordinator';
-import { LangGraphCoordinationEngine } from './coordination/langraph-engine';
-import { AzureOpenAIClient } from '../llm/azure-openai';
-import { CoordinationBus } from '../redis/coordination-bus';
-
-export interface AgentRegistration {
-  agent: BaseAgent;
-  config: AgentConfig;
-  lastHealthCheck: number;
-  isHealthy: boolean;
-  activeCoordinations: Set<string>;
+export interface OrchestratorConfig {
+  maxResponseTime: {
+    light: number    // 1000ms
+    standard: number // 3000ms
+    crisis: number   // 2000ms
+    deep: number     // 8000ms
+  }
+  enableParallelProcessing: boolean
+  enablePerformanceLogging: boolean
 }
 
-export class AgentOrchestrator extends EventEmitter {
-  private readonly config: OrchestratorConfig;
-  private readonly prisma: PrismaClient;
-  private readonly redisCoordinator: RedisCoordinator;
-  private readonly langGraphEngine: LangGraphCoordinationEngine;
-  private readonly llmClient: AzureOpenAIClient;
-  private readonly coordinationBus: CoordinationBus;
-  
-  private readonly registeredAgents = new Map<string, AgentRegistration>();
-  private readonly agentsByType = new Map<AgentType, string[]>();
-  private readonly activeCoordinations = new Map<string, {
-    strategy: CoordinationStrategy;
-    agentIds: string[];
-    startTime: number;
-    timeout: number;
-  }>();
-  
-  private readonly metrics = {
-    totalMessages: 0,
-    successfulCoordinations: 0,
-    failedCoordinations: 0,
-    averageResponseTime: 0,
-    averageCoordinationTime: 0,
-    agentHealthScore: 1.0,
-    lastHealthCheck: Date.now(),
-  };
+export class AgentOrchestrator {
+  private smartRouter: SmartRouter
+  private emotionAnalyzer: EmotionAnalyzer
+  private memoryManager: MemoryManager
+  private config: OrchestratorConfig
+  private supabase = createClient()
 
-  private isShuttingDown = false;
-
-  constructor(config: OrchestratorConfig, prisma: PrismaClient) {
-    super();
-    this.config = config;
-    this.prisma = prisma;
-
-    // Initialize coordination infrastructure
-    this.coordinationBus = new CoordinationBus({
-      redis: {
-        host: new URL(config.redisConnectionString).hostname,
-        port: parseInt(new URL(config.redisConnectionString).port) || 6379,
-        password: new URL(config.redisConnectionString).password || undefined,
+  constructor(config?: Partial<OrchestratorConfig>) {
+    this.config = {
+      maxResponseTime: {
+        light: 1000,
+        standard: 3000,
+        crisis: 2000,
+        deep: 8000
       },
-      encryption: {
-        enabled: config.encryptionEnabled,
-        key: config.encryptionKey,
-      },
-      messageRetention: {
-        ttlSeconds: 3600, // 1 hour
-        maxMessages: 10000,
-      },
-      performance: {
-        batchSize: 10,
-        flushInterval: 1000,
-        compressionEnabled: false,
-      },
-    });
-
-    this.redisCoordinator = new RedisCoordinator({
-      redis: {
-        host: new URL(config.redisConnectionString).hostname,
-        port: parseInt(new URL(config.redisConnectionString).port) || 6379,
-        password: new URL(config.redisConnectionString).password || undefined,
-      },
-      encryption: {
-        enabled: config.encryptionEnabled,
-        key: config.encryptionKey,
-      },
-      messageRetention: {
-        ttlSeconds: 3600,
-        maxMessages: 10000,
-      },
-      performance: {
-        batchSize: 10,
-        flushInterval: 1000,
-        compressionEnabled: false,
-      },
-    });
-
-    this.langGraphEngine = new LangGraphCoordinationEngine(this.redisCoordinator);
-
-    this.llmClient = new AzureOpenAIClient({
-      endpoint: config.azureOpenAiEndpoint,
-      apiKey: config.azureOpenAiApiKey,
-      apiVersion: config.azureOpenAiApiVersion,
-      deployment: {
-        gpt4o: 'gpt-4o',
-        gpt4oMini: 'gpt-4o-mini',
-        gpt35Turbo: 'gpt-35-turbo',
-        embedding: 'text-embedding-ada-002',
-      },
-      hipaaCompliance: {
-        enabled: true,
-        auditLogging: true,
-        dataResidency: 'US',
-        encryptionInTransit: true,
-      },
-      rateLimit: {
-        requestsPerMinute: 100,
-        tokensPerMinute: 50000,
-        maxRetries: 3,
-        retryDelay: 1000,
-      },
-      monitoring: {
-        enabled: true,
-        logLevel: 'info',
-        metricsRetention: 86400, // 24 hours
-      },
-    });
-
-    this.setupEventHandlers();
-    this.startHealthCheckInterval();
-  }
-
-  // ============================================================================
-  // PUBLIC INTERFACE
-  // ============================================================================
-
-  /**
-   * Initialize the orchestrator
-   */
-  async initialize(): Promise<void> {
-    try {
-      await Promise.all([
-        this.coordinationBus.initialize(),
-        this.redisCoordinator.initialize(),
-      ]);
-
-      this.emit('initialized', {
-        timestamp: Date.now(),
-        config: {
-          maxConcurrentCoordinations: this.config.maxConcurrentCoordinations,
-          encryptionEnabled: this.config.encryptionEnabled,
-          auditLogRetention: this.config.auditLogRetention,
-        },
-      });
-
-    } catch (error) {
-      throw new Error(`Failed to initialize orchestrator: ${error}`);
+      enableParallelProcessing: true,
+      enablePerformanceLogging: true,
+      ...config
     }
+
+    this.smartRouter = new SmartRouter()
+    this.emotionAnalyzer = new EmotionAnalyzer()
+    this.memoryManager = new MemoryManager()
   }
 
   /**
-   * Register an agent with the orchestrator
+   * Main entry point for processing user messages
    */
-  async registerAgent(agent: BaseAgent, config: AgentConfig): Promise<void> {
-    try {
-      // Initialize the agent
-      await agent.initialize();
-
-      // Register agent
-      const registration: AgentRegistration = {
-        agent,
-        config,
-        lastHealthCheck: Date.now(),
-        isHealthy: true,
-        activeCoordinations: new Set(),
-      };
-
-      this.registeredAgents.set(config.id, registration);
-
-      // Track agents by type
-      if (!this.agentsByType.has(config.type)) {
-        this.agentsByType.set(config.type, []);
-      }
-      this.agentsByType.get(config.type)!.push(config.id);
-
-      // Setup agent event handlers
-      this.setupAgentEventHandlers(agent, config);
-
-      this.emit('agent_registered', {
-        agentId: config.id,
-        agentType: config.type,
-        timestamp: Date.now(),
-      });
-
-    } catch (error) {
-      throw new Error(`Failed to register agent ${config.id}: ${error}`);
-    }
-  }
-
-  /**
-   * Process user message with intelligent agent coordination
-   */
-  async processUserMessage(message: UserMessage): Promise<TherapyResponse> {
-    const startTime = Date.now();
-    const correlationId = generateCorrelationId();
+  async processMessage(
+    userMessage: string,
+    userId: string,
+    sessionId?: string
+  ): Promise<AgentResponse> {
+    const startTime = performance.now()
 
     try {
-      this.metrics.totalMessages++;
+      // 1. Get user context
+      const userContext = await this.getUserContext(userId)
 
-      // Create agent context
-      const context: AgentContext = {
-        sessionId: message.sessionId,
-        userId: message.userId,
-        culturalProfile: message.culturalContext,
-        sessionHistory: await this.getSessionHistory(message.sessionId),
-        userPreferences: await this.getUserPreferences(message.userId),
-        confidentialityLevel: requiresImmediateAttention(message) ? 'maximum' : 'standard',
-        timestamp: Date.now(),
-        correlationId,
-      };
+      // 2. Route the conversation
+      const routingDecision = await this.smartRouter.routeConversation(userMessage, userContext)
 
-      // Determine therapy task
-      const task = await this.analyzeAndCreateTask(message, context);
+      // 3. Check timeout for workflow mode
+      const maxTime = this.config.maxResponseTime[routingDecision.workflowMode]
+      const timeoutPromise = new Promise<AgentResponse>((_, reject) => {
+        setTimeout(() => reject(new Error('Response timeout')), maxTime)
+      })
 
-      // Select coordination strategy
-      const strategy = this.selectCoordinationStrategy(task, message);
+      // 4. Process with selected workflow
+      const responsePromise = this.executeWorkflow(
+        userMessage,
+        routingDecision,
+        userContext,
+        sessionId
+      )
 
-      // Route to appropriate agents
-      const agentIds = await this.selectAgentsForTask(task, strategy);
+      // 5. Race against timeout
+      const response = await Promise.race([responsePromise, timeoutPromise])
 
-      if (agentIds.length === 0) {
-        throw new Error('No suitable agents available for task');
+      // 6. Log performance
+      const totalTime = performance.now() - startTime
+      if (this.config.enablePerformanceLogging) {
+        console.log(`${routingDecision.workflowMode} mode completed in ${totalTime}ms (target: ${maxTime}ms)`)
       }
 
-      // Execute coordination
-      const coordinatedResponse = await this.executeCoordination(
-        message.sessionId,
-        agentIds,
-        task,
-        context,
-        strategy
-      );
+      // 7. Store conversation data
+      await this.storeConversationData(userId, sessionId, userMessage, response, routingDecision)
 
-      // Create therapy response
-      const therapyResponse: TherapyResponse = {
-        primaryResponse: coordinatedResponse.agentResponses[0] || this.createFallbackResponse(context),
-        supportingResponses: coordinatedResponse.agentResponses.slice(1),
-        coordinationSummary: {
-          agentsInvolved: agentIds,
-          coordinationStrategy: strategy,
-          totalProcessingTime: Date.now() - startTime,
-          coordinationEfficiency: coordinatedResponse.coordinationMetrics.parallelEfficiency,
-        },
-        culturalAdaptations: coordinatedResponse.culturalIntegration ? [coordinatedResponse.culturalIntegration] : undefined,
-        recommendations: this.extractRecommendations(coordinatedResponse.agentResponses),
-        sessionUpdates: await this.generateSessionUpdates(message, coordinatedResponse, context),
-        timestamp: Date.now(),
-      };
-
-      // Log coordination event
-      await this.logCoordinationEvent(message, therapyResponse, correlationId);
-
-      // Update metrics
-      this.updateSuccessMetrics(startTime);
-
-      return therapyResponse;
+      return response
 
     } catch (error) {
-      this.updateFailureMetrics(startTime);
-      
-      console.error(`Message processing failed (${correlationId}):`, error);
+      console.error('Orchestrator error:', error)
       
       // Return fallback response
-      return this.createFallbackTherapyResponse(message, context, error);
-    }
-  }
-
-  /**
-   * Route message to specific agent
-   */
-  async routeToAgent(agentType: AgentType, context: AgentContext): Promise<AgentResponse> {
-    const agentIds = this.agentsByType.get(agentType) || [];
-    
-    if (agentIds.length === 0) {
-      throw new Error(`No agents registered for type: ${agentType}`);
-    }
-
-    // Select best available agent
-    const selectedAgentId = await this.selectBestAgent(agentIds, context);
-    const registration = this.registeredAgents.get(selectedAgentId);
-
-    if (!registration || !registration.isHealthy) {
-      throw new Error(`Selected agent ${selectedAgentId} is not available`);
-    }
-
-    // Create agent message
-    const message: AgentMessage = {
-      id: nanoid(),
-      type: 'agent_query',
-      content: `Process therapy interaction for session ${context.sessionId}`,
-      metadata: {
-        sessionId: context.sessionId,
-        userId: context.userId,
-        culturalProfile: context.culturalProfile,
-      },
-      priority: 'medium',
-      source: 'orchestrator',
-      timestamp: Date.now(),
-      encrypted: this.config.encryptionEnabled,
-    };
-
-    // Process message through agent
-    return await registration.agent.processMessage(message, context);
-  }
-
-  /**
-   * Coordinate multiple agents for complex task
-   */
-  async coordinateMultiAgent(
-    agents: string[],
-    task: TherapyTask,
-    context: AgentContext
-  ): Promise<CoordinatedResponse> {
-    // Validate agent availability
-    const availableAgents = agents.filter(agentId => {
-      const registration = this.registeredAgents.get(agentId);
-      return registration && registration.isHealthy;
-    });
-
-    if (availableAgents.length === 0) {
-      throw new Error('No available agents for coordination');
-    }
-
-    // Execute coordination using LangGraph engine
-    return await this.langGraphEngine.executeCoordination(
-      context.sessionId,
-      task,
-      context,
-      task.coordinationStrategy
-    );
-  }
-
-  /**
-   * Handle agent failure with fallback mechanisms
-   */
-  async handleAgentFailure(failedAgent: string, context: AgentContext): Promise<FallbackResponse> {
-    const registration = this.registeredAgents.get(failedAgent);
-    
-    if (!registration) {
-      throw new Error(`Unknown agent: ${failedAgent}`);
-    }
-
-    // Mark agent as unhealthy
-    registration.isHealthy = false;
-
-    // Find backup agent of same type
-    const agentType = registration.config.type;
-    const backupAgents = this.agentsByType.get(agentType)?.filter(id => 
-      id !== failedAgent && this.registeredAgents.get(id)?.isHealthy
-    ) || [];
-
-    if (backupAgents.length === 0) {
-      // No backup available - create degraded response
       return {
-        fallbackAgentId: 'system_fallback',
-        originalAgentId: failedAgent,
-        failureReason: 'No backup agents available',
-        response: this.createFallbackResponse(context),
-        degradedCapabilities: [registration.config.type],
-        recoveryEstimate: 300000, // 5 minutes
-        timestamp: Date.now(),
-      };
-    }
-
-    // Route to backup agent
-    const backupAgentId = backupAgents[0];
-    
-    try {
-      const backupResponse = await this.routeToAgent(agentType, context);
-      
-      return {
-        fallbackAgentId: backupAgentId,
-        originalAgentId: failedAgent,
-        failureReason: 'Agent failure - routed to backup',
-        response: backupResponse,
-        degradedCapabilities: [],
-        recoveryEstimate: 60000, // 1 minute
-        timestamp: Date.now(),
-      };
-
-    } catch (error) {
-      return {
-        fallbackAgentId: 'system_fallback',
-        originalAgentId: failedAgent,
-        failureReason: `Backup agent also failed: ${error}`,
-        response: this.createFallbackResponse(context),
-        degradedCapabilities: [registration.config.type],
-        recoveryEstimate: 600000, // 10 minutes
-        timestamp: Date.now(),
-      };
-    }
-  }
-
-  /**
-   * Get orchestrator metrics
-   */
-  getMetrics(): typeof this.metrics & {
-    registeredAgents: number;
-    healthyAgents: number;
-    activeCoordinations: number;
-    agentMetrics: Map<string, any>;
-  } {
-    const healthyAgents = Array.from(this.registeredAgents.values())
-      .filter(reg => reg.isHealthy).length;
-
-    const agentMetrics = new Map();
-    for (const [agentId, registration] of this.registeredAgents) {
-      agentMetrics.set(agentId, {
-        type: registration.config.type,
-        isHealthy: registration.isHealthy,
-        activeCoordinations: registration.activeCoordinations.size,
-        lastHealthCheck: registration.lastHealthCheck,
-        performance: registration.agent.getPerformanceMetrics(),
-      });
-    }
-
-    return {
-      ...this.metrics,
-      registeredAgents: this.registeredAgents.size,
-      healthyAgents,
-      activeCoordinations: this.activeCoordinations.size,
-      agentMetrics,
-    };
-  }
-
-  /**
-   * Shutdown orchestrator gracefully
-   */
-  async shutdown(): Promise<void> {
-    this.isShuttingDown = true;
-
-    try {
-      // Cancel active coordinations
-      for (const coordinationId of this.activeCoordinations.keys()) {
-        await this.langGraphEngine.cancelWorkflow(coordinationId);
-      }
-
-      // Shutdown all agents
-      const shutdownPromises = Array.from(this.registeredAgents.values())
-        .map(registration => registration.agent.shutdown());
-      
-      await Promise.all(shutdownPromises);
-
-      // Shutdown infrastructure
-      await Promise.all([
-        this.redisCoordinator.shutdown(),
-        this.coordinationBus.shutdown(),
-      ]);
-
-      this.emit('shutdown', {
-        timestamp: Date.now(),
-        metrics: this.metrics,
-      });
-
-    } catch (error) {
-      console.error('Error during orchestrator shutdown:', error);
-    }
-  }
-
-  // ============================================================================
-  // PRIVATE METHODS
-  // ============================================================================
-
-  /**
-   * Analyze user message and create therapy task
-   */
-  private async analyzeAndCreateTask(message: UserMessage, context: AgentContext): Promise<TherapyTask> {
-    // Determine task type based on message content and context
-    let taskType: TherapyTask['type'] = 'intervention';
-    let priority: TherapyTask['priority'] = 'medium';
-    let requiredAgents: AgentType[] = ['therapy_coordinator'];
-
-    // Check for crisis indicators
-    if (requiresImmediateAttention(message)) {
-      taskType = 'crisis_response';
-      priority = 'critical';
-      requiredAgents = ['crisis_monitor', 'therapy_coordinator'];
-    }
-
-    // Check for cultural adaptation needs
-    if (message.culturalContext && Object.keys(message.culturalContext).length > 0) {
-      if (!requiredAgents.includes('cultural_adapter')) {
-        requiredAgents.push('cultural_adapter');
-      }
-    }
-
-    // Check for progress tracking needs
-    const sessionHistory = context.sessionHistory || [];
-    if (sessionHistory.length > 0) {
-      if (!requiredAgents.includes('progress_tracker')) {
-        requiredAgents.push('progress_tracker');
-      }
-    }
-
-    // Determine coordination strategy
-    let coordinationStrategy: CoordinationStrategy = 'parallel';
-    if (priority === 'critical') {
-      coordinationStrategy = 'hierarchical';
-    } else if (requiredAgents.length > 3) {
-      coordinationStrategy = 'consensus';
-    }
-
-    return {
-      id: nanoid(),
-      type: taskType,
-      description: message.content,
-      requiredAgents,
-      priority,
-      coordinationStrategy,
-      culturalConsiderations: message.culturalContext ? Object.keys(message.culturalContext) : undefined,
-      confidentialityLevel: context.confidentialityLevel,
-      timeoutMs: calculateCoordinationTimeout(coordinationStrategy, requiredAgents.length),
-      metadata: {
-        originalMessage: message,
-        context,
-      },
-    };
-  }
-
-  /**
-   * Select coordination strategy based on task and message
-   */
-  private selectCoordinationStrategy(task: TherapyTask, message: UserMessage): CoordinationStrategy {
-    // Use task's preferred strategy, but override for special cases
-    let strategy = task.coordinationStrategy;
-
-    // Emergency cases always use hierarchical
-    if (requiresImmediateAttention(message)) {
-      strategy = 'hierarchical';
-    }
-
-    // High priority tasks use sequential for better control
-    if (isHighPriorityTask(task) && strategy !== 'hierarchical') {
-      strategy = 'sequential';
-    }
-
-    // Cultural adaptation tasks benefit from consensus
-    if (task.culturalConsiderations && task.culturalConsiderations.length > 0) {
-      strategy = 'consensus';
-    }
-
-    return strategy;
-  }
-
-  /**
-   * Select agents for therapy task
-   */
-  private async selectAgentsForTask(task: TherapyTask, strategy: CoordinationStrategy): Promise<string[]> {
-    const selectedAgents: string[] = [];
-
-    for (const agentType of task.requiredAgents) {
-      const candidateAgents = this.agentsByType.get(agentType) || [];
-      const availableAgents = candidateAgents.filter(agentId => {
-        const registration = this.registeredAgents.get(agentId);
-        return registration && registration.isHealthy;
-      });
-
-      if (availableAgents.length === 0) {
-        console.warn(`No available agents for type: ${agentType}`);
-        continue;
-      }
-
-      // Select best agent for this type
-      const selectedAgent = await this.selectBestAgent(availableAgents, task.metadata?.context);
-      selectedAgents.push(selectedAgent);
-    }
-
-    return selectedAgents;
-  }
-
-  /**
-   * Select best available agent based on performance and load
-   */
-  private async selectBestAgent(candidateAgents: string[], context?: AgentContext): Promise<string> {
-    let bestAgent = candidateAgents[0];
-    let bestScore = -1;
-
-    for (const agentId of candidateAgents) {
-      const registration = this.registeredAgents.get(agentId);
-      if (!registration || !registration.isHealthy) continue;
-
-      const metrics = registration.agent.getPerformanceMetrics();
-      const loadScore = 1 - (registration.activeCoordinations.size / registration.config.maxConcurrentSessions);
-      const performanceScore = metrics.successRate;
-      const responseTimeScore = Math.max(0, 1 - (metrics.responseTime / 5000)); // 5 second baseline
-
-      const totalScore = (loadScore * 0.4) + (performanceScore * 0.4) + (responseTimeScore * 0.2);
-
-      if (totalScore > bestScore) {
-        bestScore = totalScore;
-        bestAgent = agentId;
-      }
-    }
-
-    return bestAgent;
-  }
-
-  /**
-   * Execute coordination with error handling and monitoring
-   */
-  private async executeCoordination(
-    sessionId: string,
-    agentIds: string[],
-    task: TherapyTask,
-    context: AgentContext,
-    strategy: CoordinationStrategy
-  ): Promise<CoordinatedResponse> {
-    const coordinationId = nanoid();
-    const startTime = Date.now();
-
-    try {
-      // Track coordination
-      this.activeCoordinations.set(coordinationId, {
-        strategy,
-        agentIds,
-        startTime,
-        timeout: task.timeoutMs,
-      });
-
-      // Mark agents as busy
-      agentIds.forEach(agentId => {
-        const registration = this.registeredAgents.get(agentId);
-        if (registration) {
-          registration.activeCoordinations.add(coordinationId);
+        agentType: 'therapeutic_advisor',
+        content: "I'm experiencing a technical issue, but I'm here to support you. How are you feeling right now?",
+        confidence: 0.5,
+        processingTime: performance.now() - startTime,
+        metadata: {
+          reasoning: 'Fallback response due to system error',
+          error: error instanceof Error ? error.message : 'Unknown error'
         }
-      });
-
-      // Execute coordination
-      const response = await this.langGraphEngine.executeCoordination(
-        sessionId,
-        task,
-        context,
-        strategy
-      );
-
-      // Update metrics
-      this.metrics.successfulCoordinations++;
-      const coordinationTime = Date.now() - startTime;
-      this.metrics.averageCoordinationTime = 
-        (this.metrics.averageCoordinationTime * (this.metrics.successfulCoordinations - 1) + coordinationTime) / 
-        this.metrics.successfulCoordinations;
-
-      return response;
-
-    } catch (error) {
-      this.metrics.failedCoordinations++;
-      throw error;
-
-    } finally {
-      // Cleanup
-      this.activeCoordinations.delete(coordinationId);
-      agentIds.forEach(agentId => {
-        const registration = this.registeredAgents.get(agentId);
-        if (registration) {
-          registration.activeCoordinations.delete(coordinationId);
-        }
-      });
+      }
     }
   }
 
   /**
-   * Get session history from database
+   * Execute the appropriate workflow based on routing decision
    */
-  private async getSessionHistory(sessionId: string): Promise<string[]> {
-    try {
-      const interactions = await this.prisma.therapyInteraction.findMany({
-        where: { sessionId },
-        orderBy: { timestamp: 'asc' },
-        take: 10, // Last 10 interactions
-        select: {
-          userInput: true,
-          agentResponse: true,
-          timestamp: true,
-        },
-      });
-
-      return interactions.map(interaction => 
-        `User: ${interaction.userInput}\nAgent: ${interaction.agentResponse}\n---`
-      );
-
-    } catch (error) {
-      console.error('Failed to fetch session history:', error);
-      return [];
+  private async executeWorkflow(
+    userMessage: string,
+    routingDecision: any,
+    userContext: UserContext,
+    sessionId?: string
+  ): Promise<AgentResponse> {
+    switch (routingDecision.workflowMode) {
+      case 'crisis':
+        return this.executeCrisisWorkflow(userMessage, routingDecision, userContext)
+      
+      case 'light':
+        return this.executeLightWorkflow(userMessage, routingDecision, userContext)
+      
+      case 'deep':
+        return this.executeDeepWorkflow(userMessage, routingDecision, userContext)
+      
+      case 'standard':
+      default:
+        return this.executeStandardWorkflow(userMessage, routingDecision, userContext)
     }
   }
 
   /**
-   * Get user preferences from database
+   * Crisis workflow - immediate safety-focused response
    */
-  private async getUserPreferences(userId: string): Promise<Record<string, any>> {
-    try {
-      const user = await this.prisma.user.findUnique({
-        where: { id: userId },
-        select: {
-          profile: true,
-          culturalBackground: true,
-          privacySettings: true,
-        },
-      });
+  private async executeCrisisWorkflow(
+    userMessage: string,
+    routingDecision: any,
+    userContext: UserContext
+  ): Promise<AgentResponse> {
+    const crisisResponse = `I'm really concerned about you right now, and I want you to know that you're not alone. Your safety is the most important thing.
 
-      return {
-        profile: user?.profile || {},
-        culturalBackground: user?.culturalBackground || {},
-        privacySettings: user?.privacySettings || {},
-      };
+If you're having thoughts of hurting yourself, please reach out for immediate help:
+• Call 988 (Suicide & Crisis Lifeline) - available 24/7
+• Text HOME to 741741 (Crisis Text Line)
+• Call 911 if you're in immediate danger
 
-    } catch (error) {
-      console.error('Failed to fetch user preferences:', error);
-      return {};
+You matter, and there are people who want to help you through this difficult time. Can you tell me if you're in a safe place right now?`
+
+    return {
+      agentType: 'crisis_assessor',
+      content: crisisResponse,
+      confidence: 0.95,
+      processingTime: performance.now(),
+      metadata: {
+        reasoning: 'Crisis intervention response triggered',
+        interventions: ['crisis_resources', 'safety_check', 'professional_referral'],
+        urgency: 'immediate',
+        followUpActions: ['continuous_monitoring', 'safety_plan_activation']
+      }
     }
   }
 
   /**
-   * Extract recommendations from agent responses
+   * Light workflow - simple, fast responses
    */
-  private extractRecommendations(responses: AgentResponse[]): string[] {
-    const recommendations: string[] = [];
+  private async executeLightWorkflow(
+    userMessage: string,
+    routingDecision: any,
+    userContext: UserContext
+  ): Promise<AgentResponse> {
+    const emotion = routingDecision.context.emotionalState
 
-    for (const response of responses) {
-      if (response.actionItems) {
-        recommendations.push(...response.actionItems);
+    // Simple empathetic responses based on emotion
+    let response = "I hear you. "
+    
+    if (emotion?.primaryEmotion === 'sadness') {
+      response += "It sounds like you're going through a difficult time. I'm here to listen and support you."
+    } else if (emotion?.primaryEmotion === 'anxiety') {
+      response += "I can sense you might be feeling anxious. Take a deep breath - you're safe here with me."
+    } else if (emotion?.primaryEmotion === 'joy') {
+      response += "It's wonderful to hear some positivity from you! I'd love to hear more about what's going well."
+    } else {
+      response += "How are you feeling right now? I'm here to support you in whatever way you need."
+    }
+
+    return {
+      agentType: 'emotion_analyzer',
+      content: response,
+      confidence: 0.8,
+      processingTime: performance.now(),
+      metadata: {
+        reasoning: 'Light mode empathetic response',
+        interventions: ['emotional_validation', 'supportive_presence']
+      }
+    }
+  }
+
+  /**
+   * Standard workflow - balanced therapeutic support
+   */
+  private async executeStandardWorkflow(
+    userMessage: string,
+    routingDecision: any,
+    userContext: UserContext
+  ): Promise<AgentResponse> {
+    const emotion = routingDecision.context.emotionalState
+    
+    let response = "Thank you for sharing that with me. "
+
+    // Provide more comprehensive support based on context
+    if (emotion?.intensity > 6) {
+      response += `I can sense you're experiencing ${emotion.primaryEmotion} quite intensely right now. That must feel overwhelming. `
+      
+      if (emotion.primaryEmotion === 'anxiety') {
+        response += "Let's try a quick grounding exercise: Can you name 5 things you can see around you right now? This can help bring you back to the present moment."
+      } else if (emotion.primaryEmotion === 'sadness') {
+        response += "It's okay to feel sad - emotions are valid and important signals. What's been weighing most heavily on your mind lately?"
+      } else if (emotion.primaryEmotion === 'anger') {
+        response += "Anger often signals that something important to us feels threatened. What's behind these feelings for you?"
+      }
+    } else {
+      response += "I'm here to support you through whatever you're experiencing. What would be most helpful to talk about today?"
+    }
+
+    return {
+      agentType: 'therapeutic_advisor',
+      content: response,
+      confidence: 0.85,
+      processingTime: performance.now(),
+      metadata: {
+        reasoning: 'Standard therapeutic response with emotion-specific intervention',
+        interventions: ['emotional_validation', 'therapeutic_questioning', 'coping_strategies'],
+        recommendations: ['continue_conversation', 'explore_emotions']
+      }
+    }
+  }
+
+  /**
+   * Deep workflow - comprehensive therapeutic work
+   */
+  private async executeDeepWorkflow(
+    userMessage: string,
+    routingDecision: any,
+    userContext: UserContext
+  ): Promise<AgentResponse> {
+    const emotion = routingDecision.context.emotionalState
+    
+    // Get contextual memories for deep therapeutic work
+    const relevantMemories = await this.memoryManager.getContextualMemories(
+      emotion?.primaryEmotion || 'neutral',
+      'therapy deep_work patterns',
+      userContext.userId
+    )
+
+    let response = "I really appreciate you trusting me with something so important. "
+
+    // Use memory context if available
+    if (relevantMemories.length > 0) {
+      const patternMemories = relevantMemories.filter(m => m.memoryType === 'pattern')
+      const insightMemories = relevantMemories.filter(m => m.memoryType === 'insight')
+      
+      if (patternMemories.length > 0) {
+        response += "As we explore this, I'm noticing some patterns from our previous conversations that might be relevant. "
+      }
+      
+      if (insightMemories.length > 0) {
+        response += "This also connects to some insights we've discovered together before. "
       }
     }
 
-    return Array.from(new Set(recommendations)); // Remove duplicates
-  }
+    // Comprehensive therapeutic response
+    response += `What you're sharing shows a lot of courage, and I want to make sure we take the time to really understand what you're going through.
 
-  /**
-   * Generate session updates for database
-   */
-  private async generateSessionUpdates(
-    message: UserMessage,
-    response: CoordinatedResponse,
-    context: AgentContext
-  ): Promise<Record<string, any>> {
+From what you've told me, I'm hearing themes of ${emotion?.primaryEmotion} and it seems like this is affecting you quite significantly. `
+
+    if (userContext.activeGoals.length > 0) {
+      response += `I also want to acknowledge the work you've been doing on your goals - that takes real commitment. `
+    }
+
+    response += `
+
+Let's explore this together. Sometimes when we're feeling ${emotion?.primaryEmotion}, it can help to understand:
+• What situations or thoughts tend to trigger these feelings?
+• How does this connect to other experiences you've had?
+• What has helped you cope with similar feelings in the past?
+
+What feels most important to focus on right now?`
+
     return {
-      lastInteraction: Date.now(),
-      culturalAdaptations: response.culturalIntegration,
-      coordinationSummary: {
-        strategy: response.strategy,
-        agentCount: response.agentResponses.length,
-        processingTime: response.coordinationMetrics.totalProcessingTime,
-      },
-      sessionMetrics: {
-        messageCount: this.metrics.totalMessages,
-        averageResponseTime: this.metrics.averageResponseTime,
-      },
-    };
+      agentType: 'therapeutic_advisor',
+      content: response,
+      confidence: 0.9,
+      processingTime: performance.now(),
+      metadata: {
+        reasoning: 'Deep therapeutic exploration with CBT framework',
+        interventions: [
+          'emotional_validation',
+          'therapeutic_exploration',
+          'pattern_identification',
+          'coping_strategy_development'
+        ],
+        recommendations: [
+          'continue_deep_exploration',
+          'identify_patterns',
+          'develop_coping_strategies',
+          'set_therapeutic_goals'
+        ],
+        followUpActions: [
+          'schedule_follow_up',
+          'assign_therapeutic_exercises',
+          'monitor_progress'
+        ]
+      }
+    }
   }
 
   /**
-   * Log coordination event to database
+   * Get user context for decision making
    */
-  private async logCoordinationEvent(
-    message: UserMessage,
-    response: TherapyResponse,
-    correlationId: string
+  private async getUserContext(userId: string): Promise<UserContext> {
+    try {
+      // Get recent conversation history
+      const { data: recentSessions } = await this.supabase
+        .from('therapy_sessions')
+        .select('*')
+        .eq('user_id', userId)
+        .order('started_at', { ascending: false })
+        .limit(5)
+
+      // Get recent emotional data
+      const { data: emotionalHistory } = await this.supabase
+        .from('emotion_tracking')
+        .select('*')
+        .eq('user_id', userId)
+        .order('recorded_at', { ascending: false })
+        .limit(10)
+
+      // Get active goals
+      const { data: activeGoals } = await this.supabase
+        .from('therapeutic_goals')
+        .select('goal_title')
+        .eq('user_id', userId)
+        .eq('status', 'active')
+
+      // Get crisis history
+      const { data: crisisHistory } = await this.supabase
+        .from('crisis_assessments')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(5)
+
+      // Get recent relevant memories
+      const recentMemories = await this.memoryManager.retrieveRelevantMemories(
+        'recent context conversation therapy',
+        userId,
+        8, // Get 8 most relevant memories
+        0.7 // Lower similarity threshold for broader context
+      )
+
+      return {
+        userId,
+        sessionId: recentSessions?.[0]?.id || '',
+        emotionalHistory: emotionalHistory?.map(e => ({
+          primaryEmotion: e.primary_emotion,
+          intensity: e.emotion_intensity,
+          valence: e.emotion_vector[0] || 50,
+          arousal: e.emotion_vector[1] || 50,
+          confidence: e.confidence_score,
+          emotions: {
+            joy: 0, sadness: 0, anger: 0, fear: 0, 
+            surprise: 0, disgust: 0, anxiety: 0, depression: 0
+          },
+          linguisticMarkers: e.triggers || [],
+          emotionalTrend: 'stable' as const
+        })) || [],
+        recentMemories: recentMemories.map(memory => ({
+          id: memory.id,
+          userId,
+          content: memory.content,
+          timestamp: memory.createdAt,
+          type: memory.memoryType as any,
+          emotionalContext: {
+            primaryEmotion: 'neutral',
+            intensity: Math.round(memory.importance * 10),
+            valence: 50,
+            arousal: 50,
+            confidence: memory.score,
+            emotions: { joy: 0, sadness: 0, anger: 0, fear: 0, surprise: 0, disgust: 0, anxiety: 0, depression: 0 },
+            linguisticMarkers: memory.categories,
+            emotionalTrend: 'stable' as const
+          },
+          importance: Math.round(memory.importance * 100),
+          tags: memory.categories
+        })),
+        activeGoals: activeGoals?.map(g => g.goal_title) || [],
+        crisisHistory: crisisHistory?.map(c => ({
+          riskLevel: c.risk_level as any,
+          urgency: 'moderate' as const,
+          confidence: c.assessor_confidence,
+          triggers: Object.keys(c.identified_risk_factors || {}),
+          protectiveFactors: Object.keys(c.protective_factors || {}),
+          riskFactors: Object.keys(c.identified_risk_factors || {}),
+          immediateActions: [],
+          followUpRequired: c.follow_up_scheduled,
+          escalationPath: []
+        })) || []
+      }
+    } catch (error) {
+      console.error('Error getting user context:', error)
+      
+      // Return minimal context
+      return {
+        userId,
+        sessionId: '',
+        emotionalHistory: [],
+        recentMemories: [],
+        activeGoals: [],
+        crisisHistory: []
+      }
+    }
+  }
+
+  /**
+   * Store conversation data for learning and analysis
+   */
+  private async storeConversationData(
+    userId: string,
+    sessionId: string | undefined,
+    userMessage: string,
+    agentResponse: AgentResponse,
+    routingDecision: any
   ): Promise<void> {
     try {
-      await this.prisma.agentCoordinationLog.create({
-        data: {
-          sessionId: message.sessionId,
-          coordinationEvent: 'user_message_processed',
-          agentsInvolved: response.coordinationSummary.agentsInvolved,
-          timingData: {
-            totalProcessingTime: response.coordinationSummary.totalProcessingTime,
-            strategy: response.coordinationSummary.coordinationStrategy,
-            correlationId,
-          },
-          success: true,
-        },
-      });
+      // Create session if needed
+      let currentSessionId = sessionId
+      if (!currentSessionId) {
+        const { data: session } = await this.supabase
+          .from('therapy_sessions')
+          .insert({
+            user_id: userId,
+            session_type: routingDecision.workflowMode,
+            primary_emotion: routingDecision.context.emotionalState?.primaryEmotion,
+            emotion_intensity: routingDecision.context.emotionalState?.intensity,
+            risk_level: routingDecision.context.crisisLevel?.riskLevel || 'minimal',
+            workflow_used: routingDecision.workflowMode
+          })
+          .select('id')
+          .single()
+        
+        currentSessionId = session?.id
+      }
 
+      if (currentSessionId) {
+        // Store user message
+        await this.supabase
+          .from('conversation_messages')
+          .insert({
+            session_id: currentSessionId,
+            message_type: 'user',
+            content: userMessage,
+            timestamp: new Date().toISOString()
+          })
+
+        // Store agent response
+        await this.supabase
+          .from('conversation_messages')
+          .insert({
+            session_id: currentSessionId,
+            message_type: 'agent',
+            content: agentResponse.content,
+            agent_type: agentResponse.agentType,
+            workflow_mode: routingDecision.workflowMode,
+            response_time_ms: agentResponse.processingTime,
+            therapeutic_interventions: agentResponse.metadata,
+            timestamp: new Date().toISOString()
+          })
+
+        // Store significant user message as memory
+        await this.storeSignificantMemory(userId, userMessage, routingDecision, agentResponse)
+      }
     } catch (error) {
-      console.error('Failed to log coordination event:', error);
+      console.error('Error storing conversation data:', error)
     }
   }
 
   /**
-   * Create fallback response for system errors
+   * Store significant conversation elements as memories
    */
-  private createFallbackResponse(context: AgentContext): AgentResponse {
-    return {
-      agentId: 'system_fallback',
-      agentType: 'therapy_coordinator',
-      content: 'I apologize, but I\'m experiencing some technical difficulties right now. Please know that your wellbeing is important to me. If this is an emergency, please contact emergency services or a crisis hotline immediately.',
-      confidence: 0.8,
-      followUpRequired: true,
-      escalationNeeded: false,
-      processingTimeMs: 0,
-      timestamp: Date.now(),
-    };
-  }
+  private async storeSignificantMemory(
+    userId: string,
+    userMessage: string,
+    routingDecision: any,
+    agentResponse: AgentResponse
+  ): Promise<void> {
+    try {
+      const emotionalContext = routingDecision.context.emotionalState
+      const workflowMode = routingDecision.workflowMode
 
-  /**
-   * Create fallback therapy response
-   */
-  private createFallbackTherapyResponse(
-    message: UserMessage,
-    context: AgentContext,
-    error: any
-  ): TherapyResponse {
-    const fallbackResponse = this.createFallbackResponse(context);
+      // Determine if this should be stored as a memory
+      let shouldStore = false
+      let memoryType: MemoryType = 'event'
+      let importance = 0.3
 
-    return {
-      primaryResponse: fallbackResponse,
-      coordinationSummary: {
-        agentsInvolved: ['system_fallback'],
-        coordinationStrategy: 'parallel',
-        totalProcessingTime: 0,
-        coordinationEfficiency: 0,
-      },
-      recommendations: ['Please try again in a few moments', 'Contact support if issues persist'],
-      timestamp: Date.now(),
-    };
-  }
-
-  /**
-   * Setup orchestrator event handlers
-   */
-  private setupEventHandlers(): void {
-    this.redisCoordinator.on('error', (error) => {
-      console.error('Redis coordinator error:', error);
-      this.emit('coordination_error', error);
-    });
-
-    this.coordinationBus.on('redis_error', (error) => {
-      console.error('Coordination bus error:', error);
-      this.emit('bus_error', error);
-    });
-  }
-
-  /**
-   * Setup agent-specific event handlers
-   */
-  private setupAgentEventHandlers(agent: BaseAgent, config: AgentConfig): void {
-    agent.on('processing_error', (event) => {
-      console.error(`Agent ${config.id} processing error:`, event);
-      
-      // Mark agent as potentially unhealthy
-      const registration = this.registeredAgents.get(config.id);
-      if (registration) {
-        registration.isHealthy = false;
+      // Crisis situations always stored with high importance
+      if (workflowMode === 'crisis') {
+        shouldStore = true
+        memoryType = 'crisis'
+        importance = 0.9
       }
-    });
-
-    agent.on('health_check_failed', (event) => {
-      const registration = this.registeredAgents.get(config.id);
-      if (registration) {
-        registration.isHealthy = false;
-        registration.lastHealthCheck = Date.now();
+      // High intensity emotions
+      else if (emotionalContext && emotionalContext.intensity > 6) {
+        shouldStore = true
+        memoryType = 'event'
+        importance = 0.7
       }
-    });
-
-    agent.on('health_check_recovered', (event) => {
-      const registration = this.registeredAgents.get(config.id);
-      if (registration) {
-        registration.isHealthy = true;
-        registration.lastHealthCheck = Date.now();
+      // Deep therapeutic work
+      else if (workflowMode === 'deep') {
+        shouldStore = true
+        memoryType = 'insight'
+        importance = 0.8
       }
-    });
-  }
+      // Patterns and goals mentioned
+      else if (userMessage.toLowerCase().includes('goal') || 
+               userMessage.toLowerCase().includes('pattern') ||
+               userMessage.toLowerCase().includes('always') ||
+               userMessage.toLowerCase().includes('never')) {
+        shouldStore = true
+        memoryType = userMessage.toLowerCase().includes('goal') ? 'goal' : 'pattern'
+        importance = 0.6
+      }
+      // Preferences expressed
+      else if (userMessage.toLowerCase().includes('prefer') ||
+               userMessage.toLowerCase().includes('like') ||
+               userMessage.toLowerCase().includes('dislike') ||
+               userMessage.toLowerCase().includes('hate')) {
+        shouldStore = true
+        memoryType = 'preference'
+        importance = 0.5
+      }
 
-  /**
-   * Update success metrics
-   */
-  private updateSuccessMetrics(startTime: number): void {
-    const responseTime = Date.now() - startTime;
-    
-    // Update average response time (exponential moving average)
-    const alpha = 0.1;
-    this.metrics.averageResponseTime = 
-      alpha * responseTime + (1 - alpha) * this.metrics.averageResponseTime;
-  }
-
-  /**
-   * Update failure metrics
-   */
-  private updateFailureMetrics(startTime: number): void {
-    // Could track failure-specific metrics here
-  }
-
-  /**
-   * Start health check interval for all agents
-   */
-  private startHealthCheckInterval(): void {
-    setInterval(async () => {
-      if (this.isShuttingDown) return;
-
-      let healthyAgents = 0;
-      const totalAgents = this.registeredAgents.size;
-
-      for (const [agentId, registration] of this.registeredAgents) {
-        try {
-          const isHealthy = await registration.agent.getStatus() !== 'failed';
-          registration.isHealthy = isHealthy;
-          registration.lastHealthCheck = Date.now();
-          
-          if (isHealthy) healthyAgents++;
-
-        } catch (error) {
-          console.error(`Health check failed for agent ${agentId}:`, error);
-          registration.isHealthy = false;
+      if (shouldStore) {
+        // Determine categories based on content and routing
+        const categories: string[] = []
+        if (emotionalContext) {
+          categories.push('emotional-expression')
+          if (emotionalContext.primaryEmotion !== 'neutral') {
+            categories.push(emotionalContext.primaryEmotion)
+          }
         }
+        if (workflowMode === 'crisis') categories.push('crisis')
+        if (workflowMode === 'deep') categories.push('therapy')
+        
+        // Extract related goals if mentioned
+        const relatedGoals: string[] = []
+        if (userMessage.toLowerCase().includes('goal')) {
+          relatedGoals.push('mentioned-goal')
+        }
+
+        await this.memoryManager.storeMemory(
+          userId,
+          userMessage,
+          memoryType,
+          emotionalContext,
+          importance,
+          categories,
+          relatedGoals
+        )
+
+        console.log(`Stored ${memoryType} memory for user ${userId} with importance ${importance}`)
       }
-
-      this.metrics.agentHealthScore = totalAgents > 0 ? healthyAgents / totalAgents : 1.0;
-      this.metrics.lastHealthCheck = Date.now();
-
-    }, 30000); // Every 30 seconds
+    } catch (error) {
+      console.error('Error storing memory:', error)
+      // Don't throw - memory storage failure shouldn't break the conversation
+    }
   }
 }

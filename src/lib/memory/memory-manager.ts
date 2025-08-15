@@ -1,536 +1,423 @@
-import { Redis } from 'ioredis'
-import { randomUUID } from 'crypto'
+import { getIndex } from '@/lib/pinecone/client'
 import { createClient } from '@/lib/supabase/client'
+import { MemoryEntry, UserMemory, MemoryType } from '@/lib/types/memory'
+import { EmotionAnalysis } from '@/lib/types/agent'
+import { generateEmbedding, generateSummary, analyzeEmotionalContent } from '@/lib/openai/client'
 
-export interface MemoryContext {
-  sessionId: string
-  userId: string
-  agentType: string
-  conversationHistory: ConversationMessage[]
-  culturalContext: CulturalMemory
-  therapeuticState: TherapeuticMemory
-  metadata: MemoryMetadata
-}
-
-export interface ConversationMessage {
+export interface MemoryEmbedding {
   id: string
-  role: 'user' | 'agent' | 'system'
+  values: number[]
+  metadata: {
+    userId: string
+    memoryType: MemoryType
+    importance: number
+    emotionalValence: number
+    createdAt: string
+    lastAccessedAt: string
+    accessCount: number
+    categories: string[]
+    relatedGoals: string[]
+    therapeuticRelevance: number
+    sensitivityLevel: 'low' | 'medium' | 'high' | 'critical'
+    retentionDays: number
+    content: string
+    summary: string
+  }
+}
+
+export interface MemorySearchResult {
+  id: string
+  score: number
   content: string
-  agentType?: string
-  timestamp: Date
-  encrypted: boolean
-}
-
-export interface CulturalMemory {
-  primaryCulture: string
-  culturalPreferences: string[]
-  culturalContent: CulturalContentReference[]
-  culturalAdaptations: string[]
-  sensitivityFlags: string[]
-}
-
-export interface TherapeuticMemory {
-  currentGoals: string[]
-  progressMarkers: ProgressMarker[]
-  therapeuticAlliance: number // 0-1 score
-  interventionHistory: InterventionRecord[]
-  riskFactors: string[]
-  protectiveFactors: string[]
-}
-
-export interface MemoryMetadata {
+  summary: string
+  memoryType: MemoryType
+  importance: number
   createdAt: Date
-  lastAccessed: Date
-  accessCount: number
-  privacy: PrivacySettings
-  retention: RetentionSettings
+  categories: string[]
+  therapeuticRelevance: number
 }
 
-export interface PrivacySettings {
-  encryptionLevel: 'basic' | 'enhanced' | 'maximum'
-  dataClassification: 'public' | 'confidential' | 'restricted'
-  accessLog: boolean
-  auditTrail: boolean
-}
-
-export interface RetentionSettings {
-  retentionPeriod: number // days
-  autoDelete: boolean
-  archiveAfter: number // days
-  anonymizeAfter: number // days
-}
-
-export class AgentMemoryManager {
-  private redis: Redis
-  private supabase: ReturnType<typeof createClient>
-  private encryptionKey: string
-
-  constructor() {
-    this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
-      retryDelayOnFailover: 100,
-      maxRetriesPerRequest: 3,
-      lazyConnect: true,
-    })
-    this.supabase = createClient()
-    this.encryptionKey = process.env.ENCRYPTION_KEY || 'default-key-change-in-production'
-  }
+export class MemoryManager {
+  private supabase = createClient()
+  private indexName = process.env.PINECONE_INDEX_NAME || 'facet-memory'
 
   /**
-   * Initialize memory context for a new therapy session
+   * Store a new memory with vector embedding
    */
-  async initializeMemoryContext(
-    sessionId: string,
+  async storeMemory(
     userId: string,
-    initialContext: Partial<MemoryContext> = {}
-  ): Promise<MemoryContext> {
+    content: string,
+    memoryType: MemoryType,
+    emotionalContext?: EmotionAnalysis,
+    importance: number = 0.5,
+    categories: string[] = [],
+    relatedGoals: string[] = []
+  ): Promise<string> {
     try {
-      // Get user's cultural profile
-      const { data: userProfile } = await this.supabase
-        .from('user_cultural_profiles')
-        .select('*')
-        .eq('user_id', userId)
-        .single()
-
-      // Get previous session context for continuity
-      const previousContext = await this.getPreviousSessionContext(userId)
-
-      const memoryContext: MemoryContext = {
-        sessionId,
-        userId,
-        agentType: 'intake', // Start with intake agent
-        conversationHistory: [],
-        culturalContext: {
-          primaryCulture: userProfile?.primary_culture || 'unknown',
-          culturalPreferences: userProfile?.language_preferences || [],
-          culturalContent: [],
-          culturalAdaptations: [],
-          sensitivityFlags: []
-        },
-        therapeuticState: {
-          currentGoals: previousContext?.therapeuticState.currentGoals || [],
-          progressMarkers: [],
-          therapeuticAlliance: previousContext?.therapeuticState.therapeuticAlliance || 0.5,
-          interventionHistory: [],
-          riskFactors: [],
-          protectiveFactors: []
-        },
-        metadata: {
-          createdAt: new Date(),
-          lastAccessed: new Date(),
-          accessCount: 0,
-          privacy: {
-            encryptionLevel: 'enhanced',
-            dataClassification: 'restricted',
-            accessLog: true,
-            auditTrail: true
-          },
-          retention: {
-            retentionPeriod: 2555, // 7 years for medical records
-            autoDelete: false,
-            archiveAfter: 365,
-            anonymizeAfter: 1825 // 5 years
-          }
-        },
-        ...initialContext
-      }
-
-      // Store in Redis for fast access
-      await this.storeMemoryContext(memoryContext)
-
-      // Log memory initialization
-      await this.logMemoryAccess(sessionId, userId, 'initialize', 'success')
-
-      return memoryContext
-    } catch (error) {
-      await this.logMemoryAccess(sessionId, userId, 'initialize', 'error', error)
-      throw error
-    }
-  }
-
-  /**
-   * Store memory context with encryption
-   */
-  async storeMemoryContext(context: MemoryContext): Promise<void> {
-    try {
-      const encryptedContext = await this.encryptMemoryContext(context)
-      const key = `memory:${context.sessionId}`
+      // Generate embedding for the content using OpenAI
+      const embedding = await generateEmbedding(content)
       
-      await this.redis.setex(
-        key,
-        60 * 60 * 24, // 24 hours TTL
-        JSON.stringify(encryptedContext)
-      )
-
-      // Also store in database for persistence
-      await this.persistMemoryContext(context)
+      // Create memory ID
+      const memoryId = `memory_${userId}_${Date.now()}`
+      
+      // Analyze emotional content with AI
+      const aiAnalysis = await analyzeEmotionalContent(content)
+      
+      // Calculate emotional valence from context or AI analysis
+      const emotionalValence = emotionalContext ? 
+        (emotionalContext.valence - 50) / 50 : aiAnalysis.emotionalTone
+      
+      // Use AI analysis for therapeutic relevance if not provided
+      const therapeuticRelevance = this.calculateTherapeuticRelevance(content, categories, aiAnalysis.therapeuticRelevance)
+      
+      // Use AI analysis for sensitivity if not overridden
+      const sensitivityLevel = this.determineSensitivityLevel(content, emotionalContext, aiAnalysis.sensitivity)
+      
+      // Determine retention based on importance and sensitivity
+      const retentionDays = this.calculateRetentionDays(importance, memoryType, sensitivityLevel)
+      
+      // Create summary using OpenAI
+      const summary = await generateSummary(content, 150)
+      
+      // Prepare metadata
+      const metadata: MemoryEmbedding['metadata'] = {
+        userId,
+        memoryType,
+        importance,
+        emotionalValence,
+        createdAt: new Date().toISOString(),
+        lastAccessedAt: new Date().toISOString(),
+        accessCount: 0,
+        categories,
+        relatedGoals,
+        therapeuticRelevance,
+        sensitivityLevel,
+        retentionDays,
+        content,
+        summary
+      }
+      
+      // Store in Pinecone
+      const index = await getIndex(this.indexName)
+      await index.upsert([{
+        id: memoryId,
+        values: embedding,
+        metadata
+      }])
+      
+      // Store reference in PostgreSQL for backup and querying
+      await this.supabase
+        .from('memory_entries')
+        .insert({
+          id: memoryId,
+          user_id: userId,
+          content,
+          summary,
+          memory_type: memoryType,
+          importance,
+          emotional_valence: emotionalValence,
+          categories,
+          related_goals: relatedGoals,
+          therapeutic_relevance: metadata.therapeuticRelevance,
+          sensitivity_level: metadata.sensitivityLevel,
+          retention_expires_at: new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000).toISOString()
+        })
+      
+      return memoryId
     } catch (error) {
-      console.error('Failed to store memory context:', error)
-      throw error
+      console.error('Error storing memory:', error)
+      throw new Error('Failed to store memory')
     }
   }
 
   /**
-   * Retrieve memory context with decryption
+   * Retrieve relevant memories based on similarity search
    */
-  async getMemoryContext(sessionId: string): Promise<MemoryContext | null> {
+  async retrieveRelevantMemories(
+    queryText: string,
+    userId: string,
+    topK: number = 5,
+    similarityThreshold: number = 0.8,
+    memoryTypes?: MemoryType[]
+  ): Promise<MemorySearchResult[]> {
     try {
-      const key = `memory:${sessionId}`
-      const encryptedData = await this.redis.get(key)
-
-      if (!encryptedData) {
-        // Try to load from database
-        return await this.loadMemoryContextFromDB(sessionId)
-      }
-
-      const encryptedContext = JSON.parse(encryptedData)
-      const context = await this.decryptMemoryContext(encryptedContext)
-
-      // Update access metadata
-      context.metadata.lastAccessed = new Date()
-      context.metadata.accessCount += 1
-
-      await this.storeMemoryContext(context)
-      await this.logMemoryAccess(sessionId, context.userId, 'retrieve', 'success')
-
-      return context
+      // Generate embedding for query using OpenAI
+      const queryEmbedding = await generateEmbedding(queryText)
+      
+      // Search in Pinecone
+      const index = await getIndex(this.indexName)
+      
+      const searchResult = await index.query({
+        vector: queryEmbedding,
+        topK: topK * 2, // Get more results to filter
+        includeMetadata: true,
+        filter: {
+          userId: { $eq: userId },
+          ...(memoryTypes && { memoryType: { $in: memoryTypes } })
+        }
+      })
+      
+      // Filter by similarity threshold and format results
+      const relevantMemories: MemorySearchResult[] = searchResult.matches
+        ?.filter(match => (match.score || 0) >= similarityThreshold)
+        .slice(0, topK)
+        .map(match => ({
+          id: match.id,
+          score: match.score || 0,
+          content: match.metadata?.content as string || '',
+          summary: match.metadata?.summary as string || '',
+          memoryType: match.metadata?.memoryType as MemoryType || 'event',
+          importance: match.metadata?.importance as number || 0,
+          createdAt: new Date(match.metadata?.createdAt as string || Date.now()),
+          categories: match.metadata?.categories as string[] || [],
+          therapeuticRelevance: match.metadata?.therapeuticRelevance as number || 0
+        })) || []
+      
+      // Update access count and last accessed time
+      await this.updateMemoryAccess(relevantMemories.map(m => m.id))
+      
+      return relevantMemories
     } catch (error) {
-      console.error('Failed to retrieve memory context:', error)
-      return null
-    }
-  }
-
-  /**
-   * Add conversation message to memory
-   */
-  async addConversationMessage(
-    sessionId: string,
-    message: Omit<ConversationMessage, 'id' | 'timestamp' | 'encrypted'>
-  ): Promise<void> {
-    try {
-      const context = await this.getMemoryContext(sessionId)
-      if (!context) {
-        throw new Error(`Memory context not found for session: ${sessionId}`)
-      }
-
-      const fullMessage: ConversationMessage = {
-        id: randomUUID(),
-        timestamp: new Date(),
-        encrypted: true,
-        ...message
-      }
-
-      context.conversationHistory.push(fullMessage)
-
-      // Keep only last 50 messages in active memory
-      if (context.conversationHistory.length > 50) {
-        context.conversationHistory = context.conversationHistory.slice(-50)
-      }
-
-      await this.storeMemoryContext(context)
-    } catch (error) {
-      console.error('Failed to add conversation message:', error)
-      throw error
-    }
-  }
-
-  /**
-   * Update therapeutic state
-   */
-  async updateTherapeuticState(
-    sessionId: string,
-    updates: Partial<TherapeuticMemory>
-  ): Promise<void> {
-    try {
-      const context = await this.getMemoryContext(sessionId)
-      if (!context) {
-        throw new Error(`Memory context not found for session: ${sessionId}`)
-      }
-
-      context.therapeuticState = {
-        ...context.therapeuticState,
-        ...updates
-      }
-
-      await this.storeMemoryContext(context)
-    } catch (error) {
-      console.error('Failed to update therapeutic state:', error)
-      throw error
-    }
-  }
-
-  /**
-   * Share context between agents with privacy preservation
-   */
-  async shareContextBetweenAgents(
-    sessionId: string,
-    fromAgent: string,
-    toAgent: string,
-    contextType: 'full' | 'summary' | 'crisis-only' = 'summary'
-  ): Promise<MemoryContext | null> {
-    try {
-      const context = await this.getMemoryContext(sessionId)
-      if (!context) {
-        return null
-      }
-
-      // Create filtered context based on agent needs and privacy
-      const sharedContext = await this.filterContextForAgent(context, toAgent, contextType)
-
-      // Log context sharing for audit
-      await this.logContextSharing(sessionId, fromAgent, toAgent, contextType)
-
-      return sharedContext
-    } catch (error) {
-      console.error('Failed to share context between agents:', error)
-      return null
-    }
-  }
-
-  /**
-   * Get conversation thread for specific topic or timeframe
-   */
-  async getConversationThread(
-    sessionId: string,
-    filters: {
-      agentType?: string
-      topic?: string
-      timeRange?: { start: Date; end: Date }
-      messageCount?: number
-    } = {}
-  ): Promise<ConversationMessage[]> {
-    try {
-      const context = await this.getMemoryContext(sessionId)
-      if (!context) {
-        return []
-      }
-
-      let messages = context.conversationHistory
-
-      // Apply filters
-      if (filters.agentType) {
-        messages = messages.filter(msg => msg.agentType === filters.agentType)
-      }
-
-      if (filters.topic) {
-        messages = messages.filter(msg => 
-          msg.content.toLowerCase().includes(filters.topic.toLowerCase())
-        )
-      }
-
-      if (filters.timeRange) {
-        messages = messages.filter(msg => 
-          msg.timestamp >= filters.timeRange!.start && 
-          msg.timestamp <= filters.timeRange!.end
-        )
-      }
-
-      if (filters.messageCount) {
-        messages = messages.slice(-filters.messageCount)
-      }
-
-      return messages
-    } catch (error) {
-      console.error('Failed to get conversation thread:', error)
+      console.error('Error retrieving memories:', error)
       return []
     }
   }
 
   /**
-   * Clean up expired memory contexts
+   * Get contextual memories based on emotion and topic
    */
-  async cleanupExpiredMemory(): Promise<number> {
+  async getContextualMemories(
+    currentEmotion: string,
+    currentTopic: string,
+    userId: string,
+    timeWindow?: { start: Date, end: Date }
+  ): Promise<MemorySearchResult[]> {
+    const query = `${currentEmotion} ${currentTopic}`
+    
+    const memories = await this.retrieveRelevantMemories(
+      query,
+      userId,
+      8,
+      0.7
+    )
+    
+    // Filter by time window if provided
+    if (timeWindow) {
+      return memories.filter(memory => 
+        memory.createdAt >= timeWindow.start && 
+        memory.createdAt <= timeWindow.end
+      )
+    }
+    
+    return memories
+  }
+
+  /**
+   * Get memories related to specific therapeutic goals
+   */
+  async getProgressMemories(
+    goalId: string,
+    userId: string
+  ): Promise<MemorySearchResult[]> {
     try {
-      let cleanedCount = 0
-      const keys = await this.redis.keys('memory:*')
-
-      for (const key of keys) {
-        const data = await this.redis.get(key)
-        if (!data) continue
-
-        const context = JSON.parse(data)
-        const expiryDate = new Date(context.metadata.createdAt)
-        expiryDate.setDate(expiryDate.getDate() + context.metadata.retention.retentionPeriod)
-
-        if (new Date() > expiryDate) {
-          await this.redis.del(key)
-          cleanedCount++
+      const index = await getIndex(this.indexName)
+      
+      const searchResult = await index.query({
+        vector: new Array(1536).fill(0), // Dummy vector for metadata-only search
+        topK: 50,
+        includeMetadata: true,
+        filter: {
+          userId: { $eq: userId },
+          relatedGoals: { $in: [goalId] }
         }
-      }
-
-      return cleanedCount
+      })
+      
+      return searchResult.matches?.map(match => ({
+        id: match.id,
+        score: match.score || 0,
+        content: match.metadata?.content as string || '',
+        summary: match.metadata?.summary as string || '',
+        memoryType: match.metadata?.memoryType as MemoryType || 'event',
+        importance: match.metadata?.importance as number || 0,
+        createdAt: new Date(match.metadata?.createdAt as string || Date.now()),
+        categories: match.metadata?.categories as string[] || [],
+        therapeuticRelevance: match.metadata?.therapeuticRelevance as number || 0
+      })) || []
     } catch (error) {
-      console.error('Failed to cleanup expired memory:', error)
+      console.error('Error getting progress memories:', error)
+      return []
+    }
+  }
+
+
+  /**
+   * Calculate retention days based on importance, type, and sensitivity
+   */
+  private calculateRetentionDays(importance: number, memoryType: MemoryType, sensitivityLevel: 'low' | 'medium' | 'high' | 'critical'): number {
+    const baseDays = {
+      'event': 90,
+      'insight': 365,
+      'pattern': 365,
+      'preference': 730,
+      'goal': 365,
+      'crisis': 1095 // 3 years for crisis memories
+    }
+    
+    const sensitivityMultiplier = {
+      'low': 1.0,
+      'medium': 1.2,
+      'high': 1.5,
+      'critical': 2.0 // Critical memories kept longer
+    }
+    
+    const base = baseDays[memoryType] || 90
+    const sensitivityBonus = sensitivityMultiplier[sensitivityLevel] || 1.0
+    return Math.floor(base * (0.5 + importance) * sensitivityBonus)
+  }
+
+  /**
+   * Calculate therapeutic relevance score with AI analysis
+   */
+  private calculateTherapeuticRelevance(content: string, categories: string[], aiRelevance?: number): number {
+    // If we have AI analysis, weight it heavily
+    if (aiRelevance !== undefined) {
+      const categoryBonus = categories.filter(cat => 
+        ['therapy', 'mental-health', 'wellness', 'crisis'].includes(cat)
+      ).length * 0.1
+      
+      return Math.min(1.0, aiRelevance + categoryBonus)
+    }
+    
+    // Fallback to keyword-based analysis
+    const therapeuticKeywords = [
+      'therapy', 'counseling', 'anxiety', 'depression', 'mood', 'stress',
+      'coping', 'trigger', 'emotion', 'feeling', 'goal', 'progress',
+      'mindfulness', 'breathing', 'exercise', 'medication', 'support'
+    ]
+    
+    const lowerContent = content.toLowerCase()
+    const keywordMatches = therapeuticKeywords.filter(keyword => 
+      lowerContent.includes(keyword)
+    ).length
+    
+    const categoryBonus = categories.filter(cat => 
+      ['therapy', 'mental-health', 'wellness', 'crisis'].includes(cat)
+    ).length * 0.2
+    
+    return Math.min(1.0, (keywordMatches / therapeuticKeywords.length) + categoryBonus)
+  }
+
+  /**
+   * Determine sensitivity level based on content, emotion, and AI analysis
+   */
+  private determineSensitivityLevel(
+    content: string, 
+    emotionalContext?: EmotionAnalysis,
+    aiSensitivity?: 'low' | 'medium' | 'high' | 'critical'
+  ): 'low' | 'medium' | 'high' | 'critical' {
+    // If we have AI analysis, use it as the primary source
+    if (aiSensitivity) {
+      // But still check emotional intensity to potentially upgrade sensitivity
+      if (emotionalContext && emotionalContext.intensity > 8 && aiSensitivity !== 'critical') {
+        return aiSensitivity === 'high' ? 'critical' : 'high'
+      }
+      return aiSensitivity
+    }
+    
+    // Fallback to keyword-based analysis
+    const lowerContent = content.toLowerCase()
+    
+    // Critical keywords
+    const criticalKeywords = ['suicide', 'self-harm', 'abuse', 'trauma', 'crisis']
+    if (criticalKeywords.some(keyword => lowerContent.includes(keyword))) {
+      return 'critical'
+    }
+    
+    // High sensitivity
+    const highKeywords = ['depression', 'anxiety', 'panic', 'medication', 'therapy']
+    if (highKeywords.some(keyword => lowerContent.includes(keyword))) {
+      return 'high'
+    }
+    
+    // Check emotional intensity
+    if (emotionalContext && emotionalContext.intensity > 7) {
+      return 'high'
+    }
+    
+    if (emotionalContext && emotionalContext.intensity > 5) {
+      return 'medium'
+    }
+    
+    return 'low'
+  }
+
+  /**
+   * Update memory access tracking
+   */
+  private async updateMemoryAccess(memoryIds: string[]): Promise<void> {
+    try {
+      if (memoryIds.length === 0) return
+      
+      const index = await getIndex(this.indexName)
+      
+      // Get current metadata for memories
+      const fetchResult = await index.fetch(memoryIds)
+      
+      // Update access count and last accessed time
+      const updates = Object.entries(fetchResult.records || {}).map(([id, record]) => {
+        const metadata = record.metadata as MemoryEmbedding['metadata']
+        return {
+          id,
+          values: record.values,
+          metadata: {
+            ...metadata,
+            lastAccessedAt: new Date().toISOString(),
+            accessCount: (metadata.accessCount || 0) + 1
+          }
+        }
+      })
+      
+      if (updates.length > 0) {
+        await index.upsert(updates)
+      }
+    } catch (error) {
+      console.error('Error updating memory access:', error)
+      // Non-critical error, don't throw
+    }
+  }
+
+  /**
+   * Clean up expired memories
+   */
+  async cleanupExpiredMemories(): Promise<number> {
+    try {
+      // Get expired memories from PostgreSQL
+      const { data: expiredMemories } = await this.supabase
+        .from('memory_entries')
+        .select('id')
+        .lt('retention_expires_at', new Date().toISOString())
+      
+      if (!expiredMemories || expiredMemories.length === 0) {
+        return 0
+      }
+      
+      const memoryIds = expiredMemories.map(m => m.id)
+      
+      // Delete from Pinecone
+      const index = await getIndex(this.indexName)
+      await index.deleteMany(memoryIds)
+      
+      // Delete from PostgreSQL
+      await this.supabase
+        .from('memory_entries')
+        .delete()
+        .in('id', memoryIds)
+      
+      console.log(`Cleaned up ${memoryIds.length} expired memories`)
+      return memoryIds.length
+    } catch (error) {
+      console.error('Error cleaning up expired memories:', error)
       return 0
     }
   }
-
-  // Private helper methods
-
-  private async encryptMemoryContext(context: MemoryContext): Promise<any> {
-    // Simple encryption for demo - use proper encryption in production
-    const data = JSON.stringify(context)
-    return {
-      encrypted: Buffer.from(data).toString('base64'),
-      algorithm: 'base64', // Use AES-256-GCM in production
-      iv: randomUUID()
-    }
-  }
-
-  private async decryptMemoryContext(encryptedContext: any): Promise<MemoryContext> {
-    // Simple decryption for demo - use proper decryption in production
-    const data = Buffer.from(encryptedContext.encrypted, 'base64').toString('utf-8')
-    return JSON.parse(data)
-  }
-
-  private async persistMemoryContext(context: MemoryContext): Promise<void> {
-    try {
-      await this.supabase
-        .from('memory_contexts')
-        .upsert({
-          session_id: context.sessionId,
-          user_id: context.userId,
-          agent_type: context.agentType,
-          context_data: context,
-          created_at: context.metadata.createdAt,
-          last_accessed: context.metadata.lastAccessed
-        })
-    } catch (error) {
-      console.error('Failed to persist memory context:', error)
-    }
-  }
-
-  private async loadMemoryContextFromDB(sessionId: string): Promise<MemoryContext | null> {
-    try {
-      const { data } = await this.supabase
-        .from('memory_contexts')
-        .select('*')
-        .eq('session_id', sessionId)
-        .single()
-
-      return data?.context_data || null
-    } catch (error) {
-      console.error('Failed to load memory context from DB:', error)
-      return null
-    }
-  }
-
-  private async getPreviousSessionContext(userId: string): Promise<MemoryContext | null> {
-    try {
-      const { data } = await this.supabase
-        .from('memory_contexts')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single()
-
-      return data?.context_data || null
-    } catch (error) {
-      return null
-    }
-  }
-
-  private async filterContextForAgent(
-    context: MemoryContext,
-    agentType: string,
-    contextType: 'full' | 'summary' | 'crisis-only'
-  ): Promise<MemoryContext> {
-    const filteredContext = { ...context }
-
-    switch (contextType) {
-      case 'crisis-only':
-        filteredContext.conversationHistory = context.conversationHistory.filter(
-          msg => msg.content.toLowerCase().includes('crisis') || 
-                 msg.content.toLowerCase().includes('emergency')
-        )
-        filteredContext.therapeuticState = {
-          ...context.therapeuticState,
-          riskFactors: context.therapeuticState.riskFactors,
-          protectiveFactors: context.therapeuticState.protectiveFactors,
-          currentGoals: [],
-          progressMarkers: [],
-          therapeuticAlliance: context.therapeuticState.therapeuticAlliance,
-          interventionHistory: []
-        }
-        break
-
-      case 'summary':
-        filteredContext.conversationHistory = context.conversationHistory.slice(-10)
-        break
-
-      case 'full':
-        // No filtering
-        break
-    }
-
-    return filteredContext
-  }
-
-  private async logMemoryAccess(
-    sessionId: string,
-    userId: string,
-    action: string,
-    status: 'success' | 'error',
-    error?: any
-  ): Promise<void> {
-    try {
-      await this.supabase
-        .from('memory_access_logs')
-        .insert({
-          session_id: sessionId,
-          user_id: userId,
-          action,
-          status,
-          error_message: error?.message,
-          timestamp: new Date()
-        })
-    } catch (logError) {
-      console.error('Failed to log memory access:', logError)
-    }
-  }
-
-  private async logContextSharing(
-    sessionId: string,
-    fromAgent: string,
-    toAgent: string,
-    contextType: string
-  ): Promise<void> {
-    try {
-      await this.supabase
-        .from('context_sharing_logs')
-        .insert({
-          session_id: sessionId,
-          from_agent: fromAgent,
-          to_agent: toAgent,
-          context_type: contextType,
-          timestamp: new Date()
-        })
-    } catch (error) {
-      console.error('Failed to log context sharing:', error)
-    }
-  }
-}
-
-// Additional interfaces
-interface CulturalContentReference {
-  contentId: string
-  relevanceScore: number
-  lastUsed: Date
-}
-
-interface ProgressMarker {
-  id: string
-  goal: string
-  measurement: number
-  timestamp: Date
-  agentType: string
-}
-
-interface InterventionRecord {
-  id: string
-  type: string
-  agentType: string
-  effectiveness: number
-  timestamp: Date
-  notes: string
 }
