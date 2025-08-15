@@ -21,7 +21,7 @@ Unlike traditional AI chatbots with fixed responses, FACET employs an **Intellig
 - **Next.js 15** full-stack application with App Router
 - **Supabase** authentication and PostgreSQL database with comprehensive mental health schema
 - **Pinecone** vector database with sophisticated memory management
-- **OpenAI GPT-4** integration with basic multi-agent framework
+- **OpenAI GPT-5** integration with basic multi-agent framework
 - **FACET Design System** with established visual identity and component library
 - **Basic Chat Interface** with message handling and user authentication
 
@@ -417,7 +417,7 @@ Make the multi-agent system's collaborative intelligence **visible but not overw
 
 **Developer A - AI Systems:**
 - [ ] Install and configure LangChain + LangGraph dependencies
-- [ ] Implement basic orchestrator agent with OpenAI integration
+- [ ] Implement basic orchestrator agent with GPT-5 integration
 - [ ] Create sub-agent base class architecture
 - [ ] Design execution planning and coordination system
 - [ ] Set up Redis caching infrastructure for agent results

@@ -1,36 +1,59 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# FACET
 
-## Getting Started
+A personalized mental health platform with multi-agent AI system providing 24/7 therapeutic support, crisis intervention, and progress tracking.
 
-First, run the development server:
+## Current Implementation Status
+
+**✅ Foundation (70% Complete)**
+- **Authentication**: Supabase auth with signup/signin flows
+- **Database**: PostgreSQL schema with users, sessions, conversations, and memory tables
+- **UI Framework**: Next.js 15 with FACET design system (warm cream aesthetic, custom fonts)
+- **Basic Agents**: Emotion Analyzer, Memory Manager, Crisis Monitor, Therapy Advisor
+- **Dashboard**: User greeting, quick actions, progress tracking components
+
+**🚧 In Development (30% Remaining)**
+- **Dynamic Orchestration**: Transitioning from fixed workflows to LangChain-powered agent coordination
+- **Chat Interface**: Core `/api/chat` endpoint and real-time conversation UI
+- **Agent Transparency**: Expandable reasoning display showing multi-agent collaboration
+- **Crisis Integration**: PHQ-9/GAD-7 assessment with emergency protocols
+
+## Architecture
+
+**Multi-Agent System** (4 specialized agents):
+- **Smart Router**: Selects workflow mode (Light <1.5s, Standard <3s, Crisis <2s, Deep <8s)
+- **Emotion Analyzer**: VAD model emotion detection with trend analysis
+- **Memory Manager**: Pinecone vector storage for conversation and progress memory
+- **Crisis Monitor**: Real-time risk assessment with intervention protocols
+
+**Tech Stack**:
+- Frontend: Next.js 15, Tailwind CSS, TypeScript
+- Backend: Supabase (PostgreSQL + Auth)
+- AI: OpenAI GPT-5 (all agents), LangChain orchestration
+- Memory: Pinecone vector database
+- Real-time: WebSocket/SSE for agent status
+
+## Development
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run dev          # Start development server
+npm run build        # Production build  
+npm run lint         # ESLint checking
+npm run type-check   # TypeScript validation
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Environment Setup
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Copy `.env.local.example` to `.env.local` and configure:
+- Supabase URL and anon key
+- OpenAI API key (GPT-5 model access)
+- Pinecone API key and environment
+- LangChain API key for orchestration
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Next Steps
 
-## Learn More
+1. Implement core `/api/chat/route.ts` with LangChain orchestration
+2. Build transparent agent reasoning UI components
+3. Complete crisis assessment system integration
+4. Add real-time agent collaboration workflows
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+See `SPECS.md` for detailed architecture specifications and `CLAUDE.md` for development guidelines.
