@@ -39,10 +39,17 @@ export async function middleware(request: NextRequest) {
                       request.nextUrl.pathname.startsWith('/how-it-works') ||
                       request.nextUrl.pathname.startsWith('/privacy-policy') ||
                       request.nextUrl.pathname.startsWith('/terms')
+  
+  // Handle email confirmation on homepage
+  const hasAuthCode = request.nextUrl.searchParams.has('code')
+  if (request.nextUrl.pathname === '/' && hasAuthCode) {
+    return NextResponse.redirect(new URL('/auth/callback' + request.nextUrl.search, request.url))
+  }
+  
   const isAuthPage = request.nextUrl.pathname.startsWith('/auth')
   const isProtectedPage = !isAuthPage && !isPublicPage
 
-  // Redirect authenticated users away from signin/signup pages 
+  // Redirect authenticated users away from signin/signup/forgot-password pages
   if (user && (isSignInUpPage || isForgotPasswordPage)) {
     return NextResponse.redirect(new URL('/dashboard', request.url))
   }
@@ -52,6 +59,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL('/auth/signin', request.url))
   }
 
+  // No more onboarding - users go directly to their destination!
 
   return response
 }

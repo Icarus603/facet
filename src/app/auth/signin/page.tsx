@@ -32,27 +32,38 @@ export default function SignInPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="space-y-1 text-center">
-          <div className="flex justify-center mb-4">
-            <FacetLogo className="h-12 w-12" />
+    <div className="min-h-screen" style={{backgroundColor: '#FAF9F5'}}>
+      {/* Header */}
+      <header className="relative sticky top-0 z-50" style={{backgroundColor: '#FAF9F5'}}>
+        <div className="w-full pl-2 pr-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center h-24">
+              <FacetLogo className="h-24 w-24" />
+              <span className="text-2xl text-facet-gradient facet-title-zapfino leading-relaxed m-0 pl-2 pr-12 pt-6 pb-2 -ml-2">FACET</span>
+            </div>
           </div>
-          <CardTitle className="text-2xl font-bold">Welcome back</CardTitle>
-          <CardDescription>
-            Sign in to continue your mental health journey
-          </CardDescription>
-        </CardHeader>
-        <form onSubmit={handleSubmit}>
-          <CardContent className="space-y-4">
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <div className="flex items-start justify-center px-4 pt-2" style={{minHeight: 'calc(100vh - 200px)'}}>
+        <div className="w-full max-w-md">
+          <div className="text-center mb-4">
+            <h1 className="meslo-font text-4xl font-bold text-black mb-4" style={{fontStyle: 'italic'}}>
+              Welcome back
+            </h1>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-lg p-8">
+            <form onSubmit={handleSubmit} className="space-y-6">
             {error && (
-              <Alert variant="destructive">
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <p className="text-red-600 text-sm">{error}</p>
+              </div>
             )}
             
             <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="email" className="text-gray-700 font-medium">Email</Label>
               <Input
                 id="email"
                 type="email"
@@ -61,11 +72,12 @@ export default function SignInPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 disabled={loading}
+                className="h-12 border-gray-300 focus:border-black focus:ring-black"
               />
             </div>
             
             <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password" className="text-gray-700 font-medium">Password</Label>
               <Input
                 id="password"
                 type="password"
@@ -74,40 +86,41 @@ export default function SignInPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 disabled={loading}
+                className="h-12 border-gray-300 focus:border-black focus:ring-black"
               />
             </div>
             
             <div className="text-right">
               <Link
                 href="/auth/forgot-password"
-                className="text-sm text-blue-600 hover:text-blue-800 underline"
+                className="text-sm text-gray-600 hover:text-black underline"
               >
                 Forgot your password?
               </Link>
             </div>
-          </CardContent>
-          
-          <CardFooter className="flex flex-col space-y-4">
+
             <Button
               type="submit"
-              className="w-full"
+              variant="facet"
+              className="w-full h-12 text-base"
               disabled={loading || !email || !password}
             >
               {loading ? 'Signing in...' : 'Sign In'}
             </Button>
             
-            <p className="text-center text-sm text-gray-600">
+            <p className="text-center text-gray-600">
               Don't have an account?{' '}
               <Link
                 href="/auth/signup"
-                className="text-blue-600 hover:text-blue-800 underline font-medium"
+                className="text-black hover:text-gray-700 underline font-medium"
               >
                 Sign up
               </Link>
             </p>
-          </CardFooter>
-        </form>
-      </Card>
+            </form>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

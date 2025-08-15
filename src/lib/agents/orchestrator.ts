@@ -1,7 +1,7 @@
 import { AgentType, WorkflowMode, AgentResponse, UserContext, Message } from '@/lib/types/agent'
 import { SmartRouter } from './smart-router'
 import { EmotionAnalyzer } from './emotion-analyzer'
-import { MemoryManager } from '@/lib/memory/memory-manager'
+import { ClientMemoryManager } from '@/lib/memory/client-memory-manager'
 import { createClient } from '@/lib/supabase/client'
 import { MemoryType } from '@/lib/types/memory'
 
@@ -19,7 +19,7 @@ export interface OrchestratorConfig {
 export class AgentOrchestrator {
   private smartRouter: SmartRouter
   private emotionAnalyzer: EmotionAnalyzer
-  private memoryManager: MemoryManager
+  private memoryManager: ClientMemoryManager
   private config: OrchestratorConfig
   private supabase = createClient()
 
@@ -38,7 +38,7 @@ export class AgentOrchestrator {
 
     this.smartRouter = new SmartRouter()
     this.emotionAnalyzer = new EmotionAnalyzer()
-    this.memoryManager = new MemoryManager()
+    this.memoryManager = new ClientMemoryManager()
   }
 
   /**
@@ -247,8 +247,7 @@ You matter, and there are people who want to help you through this difficult tim
     // Get contextual memories for deep therapeutic work
     const relevantMemories = await this.memoryManager.getContextualMemories(
       emotion?.primaryEmotion || 'neutral',
-      'therapy deep_work patterns',
-      userContext.userId
+      'therapy deep_work patterns'
     )
 
     let response = "I really appreciate you trusting me with something so important. "
@@ -352,7 +351,6 @@ What feels most important to focus on right now?`
       // Get recent relevant memories
       const recentMemories = await this.memoryManager.retrieveRelevantMemories(
         'recent context conversation therapy',
-        userId,
         8, // Get 8 most relevant memories
         0.7 // Lower similarity threshold for broader context
       )
@@ -557,7 +555,6 @@ What feels most important to focus on right now?`
         }
 
         await this.memoryManager.storeMemory(
-          userId,
           userMessage,
           memoryType,
           emotionalContext,

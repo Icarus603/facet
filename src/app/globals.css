@@ -23,8 +23,8 @@
   --radius: 0.5rem;
 
   /* FACET Primary Colors */
-  --facet-blue-primary: #2C84DB;
-  --facet-wine-primary: #C41E3A;
+  --facet-blue-primary: #1A5A99;
+  --facet-wine-primary: #9A2D4A;
   
   /* FACET Supporting Colors */
   --facet-blue-light: #5BA3E8;
@@ -43,6 +43,13 @@
   --facet-chat-bg: #FAF9F5;
   --facet-white: #FFFFFF;
   --facet-send-button: #1886C0;
+  
+  /* FACET Feature Card Colors */
+  --facet-card-blue: #A5C7E2;     /* AI Therapy Card */
+  --facet-card-pink: #D4B6BA;     /* Crisis Support Card */
+  --facet-card-green: #BCD1CA;    /* Progress Tracking Card */
+  --facet-card-lavender: #CBCADB; /* Trust & Security Card */
+  --facet-card-light: #E5E4EF;    /* Small feature icons */
   
   /* FACET Gradients */
   --facet-primary-gradient: linear-gradient(135deg, #2C84DB 0%, #C41E3A 100%);
@@ -93,6 +100,13 @@ body {
 .bg-facet-chat { background-color: var(--facet-chat-bg); }
 .bg-facet-white { background-color: var(--facet-white); }
 
+/* Feature Card Colors */
+.bg-facet-card-blue { background-color: var(--facet-card-blue); }
+.bg-facet-card-pink { background-color: var(--facet-card-pink); }
+.bg-facet-card-green { background-color: var(--facet-card-green); }
+.bg-facet-card-lavender { background-color: var(--facet-card-lavender); }
+.bg-facet-card-light { background-color: var(--facet-card-light); }
+
 /* Text Colors */
 .text-facet-blue { color: var(--facet-blue-primary); }
 .text-facet-wine { color: var(--facet-wine-primary); }
@@ -118,6 +132,15 @@ body {
 .hover\:bg-facet-blue:hover { background-color: var(--facet-blue-light); }
 .hover\:bg-facet-wine:hover { background-color: var(--facet-wine-light); }
 .hover\:bg-facet-teal:hover { background-color: var(--facet-blue-light); }
+
+/* Global Hover Effects */
+.facet-hover-fade {
+  transition: opacity 0.2s ease-in-out;
+}
+
+.facet-hover-fade:hover {
+  opacity: 0.8;
+}
 
 /* Legacy Claude classes */
 .bg-claude-orange { background-color: var(--claude-orange); }

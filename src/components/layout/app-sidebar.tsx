@@ -74,13 +74,13 @@ export function AppSidebar() {
   }
 
   return (
-    <div className="flex h-screen w-64 flex-col bg-gray-50 border-r border-gray-200">
+    <div className="flex h-screen w-64 flex-col border-r border-gray-200" style={{backgroundColor: '#FAF9F5'}}>
       {/* Logo and Branding */}
       <div className="flex items-center gap-3 p-6 border-b border-gray-200">
-        <FacetLogo className="h-8 w-8" />
+        <FacetLogo className="h-10 w-10" />
         <div>
-          <h1 className="font-bold text-lg text-gray-900">FACET</h1>
-          <p className="text-xs text-gray-500">Mental Health Support</p>
+          <span className="text-xl text-facet-gradient facet-title-zapfino">FACET</span>
+          <p className="text-xs text-gray-600 mt-1">Multi-Agent AI</p>
         </div>
       </div>
 
@@ -99,23 +99,40 @@ export function AppSidebar() {
 
       {/* Main Navigation */}
       <nav className="flex-1 px-4 py-2">
-        <ul className="space-y-1">
+        <ul className="space-y-2">
           {sidebarItems.map((item) => {
             const isActive = pathname === item.href
             
             return (
               <li key={item.href}>
                 <Link href={item.href}>
-                  <Button
-                    variant={isActive ? "default" : "ghost"}
+                  <div
                     className={cn(
-                      "w-full justify-start gap-3 h-10",
-                      isActive && "bg-blue-50 text-blue-700 border border-blue-200"
+                      "w-full p-3 rounded-xl text-left transition-all duration-200 hover:shadow-sm border group cursor-pointer",
+                      isActive
+                        ? "bg-white shadow-md border-gray-200 text-gray-900"
+                        : "border-transparent hover:border-gray-200 hover:bg-white/50 text-gray-700"
                     )}
                   >
-                    <item.icon className="h-4 w-4" />
-                    {item.label}
-                  </Button>
+                    <div className="flex items-center gap-3">
+                      <div className={cn(
+                        "p-2 rounded-lg transition-colors",
+                        isActive 
+                          ? "bg-gradient-to-br from-blue-500 to-purple-600 text-white" 
+                          : "bg-gray-100 text-gray-600 group-hover:bg-gray-200"
+                      )}>
+                        <item.icon className="h-4 w-4" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className={cn(
+                          "font-medium text-sm",
+                          isActive ? "text-gray-900" : "text-gray-700"
+                        )}>
+                          {item.label}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </Link>
               </li>
             )
@@ -125,14 +142,21 @@ export function AppSidebar() {
 
       {/* User Actions */}
       <div className="p-4 border-t border-gray-200">
-        <Button
-          variant="ghost"
+        <div
           onClick={handleSignOut}
-          className="w-full justify-start gap-3 text-gray-600 hover:text-gray-900"
+          className="w-full p-3 rounded-xl text-left transition-all duration-200 hover:shadow-sm border border-transparent hover:border-gray-200 hover:bg-white/50 text-gray-700 cursor-pointer group"
         >
-          <LogOut className="h-4 w-4" />
-          Sign Out
-        </Button>
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-gray-100 text-gray-600 group-hover:bg-gray-200 transition-colors">
+              <LogOut className="h-4 w-4" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="font-medium text-sm text-gray-700">
+                Sign Out
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )

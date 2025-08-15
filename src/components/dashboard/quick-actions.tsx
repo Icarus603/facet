@@ -13,69 +13,61 @@ export function QuickActions() {
   const actions = [
     {
       icon: MessageCircle,
-      title: 'Start Therapy Session',
-      description: 'Talk with your AI therapist',
+      title: 'AI Conversations',
+      description: 'Chat with FACET AI',
       href: '/chat',
-      color: 'bg-blue-500 hover:bg-blue-600',
+      bgColor: '#A5C7E2', // AI Therapy blue
     },
     {
       icon: Heart,
-      title: 'Log Mood',
-      description: 'Track how you\'re feeling',
+      title: 'Mood Tracking',
+      description: 'Log your feelings',
       href: '/mood',
-      color: 'bg-pink-500 hover:bg-pink-600',
+      bgColor: '#D4B6BA', // Crisis Support pink
     },
     {
       icon: Target,
-      title: 'View Goals',
-      description: 'Check your progress',
+      title: 'Progress Goals',
+      description: 'Track your journey',
       href: '/goals',
-      color: 'bg-green-500 hover:bg-green-600',
-    },
-    {
-      icon: BookOpen,
-      title: 'Journal Entry',
-      description: 'Write about your day',
-      href: '/journal',
-      color: 'bg-purple-500 hover:bg-purple-600',
+      bgColor: '#BCD1CA', // Progress green
     },
     {
       icon: Zap,
-      title: 'Quick Exercise',
-      description: 'Try a mindfulness exercise',
+      title: 'Quick Support',
+      description: 'Instant wellness tools',
       href: '/exercises',
-      color: 'bg-orange-500 hover:bg-orange-600',
+      bgColor: '#CBCADB', // Trust lavender
     },
   ]
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Quick Actions</CardTitle>
-        <CardDescription>
-          Jump into activities that support your mental health
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          {actions.map((action) => (
-            <Link key={action.href} href={action.href}>
-              <Button
-                variant="outline"
-                className="h-20 flex-col gap-2 w-full border-gray-200 hover:border-gray-300"
-              >
-                <div className={`p-2 rounded-lg ${action.color} text-white`}>
-                  <action.icon className="h-5 w-5" />
+    <div className="text-center mb-8">
+      <h2 className="meslo-font text-2xl font-bold text-black mb-6" style={{fontStyle: 'italic'}}>
+        Quick Actions
+      </h2>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+        {actions.map((action) => (
+          <Link key={action.href} href={action.href}>
+            <div 
+              className="bg-white rounded-2xl shadow-lg p-8 hover:shadow-xl transition-all duration-300 hover:scale-105 cursor-pointer"
+              style={{backgroundColor: action.bgColor}}
+            >
+              <div className="flex flex-col items-center text-center">
+                <div className="mb-4 p-3 bg-white/30 rounded-full">
+                  <action.icon className="h-8 w-8 text-gray-800" />
                 </div>
-                <div className="text-center">
-                  <div className="font-medium text-sm">{action.title}</div>
-                  <div className="text-xs text-gray-500">{action.description}</div>
-                </div>
-              </Button>
-            </Link>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
+                <h3 className="text-lg font-bold text-gray-800 mb-2">
+                  {action.title}
+                </h3>
+                <p className="text-sm text-gray-700">
+                  {action.description}
+                </p>
+              </div>
+            </div>
+          </Link>
+        ))}
+      </div>
+    </div>
   )
 }
