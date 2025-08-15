@@ -43,7 +43,7 @@ npm run type-check   # TypeScript validation
 
 ## Environment Setup
 
-Copy `.env.local.example` to `.env.local` and configure:
+Copy `.env.example` to `.env.local` and configure:
 - Supabase URL and anon key
 - OpenAI API key (GPT-5 model access)
 - Pinecone API key and environment
