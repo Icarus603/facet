@@ -434,7 +434,7 @@ function getStatusInfo(status: string): any {
     }
   }
   
-  return statusMap[status] || {
+  return statusMap[status as keyof typeof statusMap] || {
     description: 'Unknown status',
     nextStep: 'Contact support for assistance',
     estimatedTime: 'Unknown'

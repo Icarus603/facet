@@ -2,26 +2,176 @@ import OpenAI from 'openai'
 
 let openaiClient: OpenAI | null = null
 
+// Model configuration with GPT-5 support
+export const MODELS = {
+  GPT_5: 'gpt-5-2025-08-07',
+  GPT_4_TURBO: 'gpt-4-turbo-2024-04-09',
+  GPT_4: 'gpt-4',
+  EMBEDDING: 'text-embedding-3-large'
+} as const
+
+export type ModelType = typeof MODELS[keyof typeof MODELS]
+
 export function getOpenAIClient(): OpenAI {
   if (!openaiClient) {
     if (!process.env.OPENAI_API_KEY) {
       throw new Error('OPENAI_API_KEY environment variable is required')
     }
 
-    openaiClient = new OpenAI({
+    // Check for HTTP proxy environment variables
+    const httpProxy = process.env.HTTP_PROXY || process.env.http_proxy
+    const httpsProxy = process.env.HTTPS_PROXY || process.env.https_proxy
+    
+    let clientOptions: any = {
       apiKey: process.env.OPENAI_API_KEY,
-    })
+      organization: process.env.OPENAI_ORG_ID,
+      defaultHeaders: {
+        'User-Agent': 'FACET-Mental-Health-Platform/2.0',
+      },
+      timeout: 120000, // 2 minutes for proxy requests
+      maxRetries: 5, // More retries for proxy instability
+    }
+    
+    if (httpProxy || httpsProxy) {
+      console.log('🌐 Configuring OpenAI client with proxy:', {
+        httpProxy: httpProxy ? '[configured]' : 'none',
+        httpsProxy: httpsProxy ? '[configured]' : 'none'
+      })
+      
+      // Import HTTP agent for proxy support
+      const { HttpsProxyAgent } = require('https-proxy-agent')
+      const proxyUrl = httpsProxy || httpProxy
+      
+      // Create proxy agent with better configuration
+      const proxyAgent = new HttpsProxyAgent(proxyUrl, {
+        timeout: 60000, // 1 minute connection timeout
+        keepAlive: true,
+        keepAliveMsecs: 10000
+      })
+      
+      // Set agent for both HTTP and HTTPS
+      clientOptions.httpAgent = proxyAgent
+      clientOptions.httpsAgent = proxyAgent
+      
+      console.log('✅ Enhanced proxy agent configured for:', proxyUrl)
+      console.log('⏱️  Proxy settings: 60s connection timeout, keepAlive enabled')
+    }
+
+    openaiClient = new OpenAI(clientOptions)
+
+    console.log('✅ OpenAI client initialized with proxy support')
   }
 
   return openaiClient
 }
 
 /**
- * Generate embeddings using OpenAI's text-embedding-ada-002 model
+ * Get the appropriate model for a given agent type
+ */
+export function getModelForAgent(agentType: string): ModelType {
+  const envVar = `${agentType.toUpperCase()}_MODEL`
+  const configuredModel = process.env[envVar]
+  
+  if (configuredModel && Object.values(MODELS).includes(configuredModel as ModelType)) {
+    return configuredModel as ModelType
+  }
+  
+  // Default to GPT-5
+  return MODELS.GPT_5
+}
+
+/**
+ * Chat completion with streaming support
+ */
+export async function createChatCompletion(
+  messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+  options: {
+    model?: ModelType
+    temperature?: number
+    maxTokens?: number
+    stream?: boolean
+    userId?: string
+    functions?: OpenAI.Chat.Completions.ChatCompletionCreateParams.Function[]
+  } = {}
+): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+  const client = getOpenAIClient()
+  
+  const params: OpenAI.Chat.Completions.ChatCompletionCreateParams = {
+    model: options.model || MODELS.GPT_5,
+    messages,
+    temperature: options.temperature ?? 0.7,
+    max_tokens: options.maxTokens || 1500,
+    stream: false, // Ensure we don't stream for this function
+    user: options.userId, // For abuse detection and analytics
+  }
+  
+  if (options.functions) {
+    params.functions = options.functions
+  }
+  
+  try {
+    const result = await client.chat.completions.create(params)
+    return result as OpenAI.Chat.Completions.ChatCompletion
+  } catch (error) {
+    console.error('OpenAI API error:', error)
+    
+    // Fallback to GPT-4 if GPT-5 fails
+    if (params.model === MODELS.GPT_5) {
+      console.log('Falling back to GPT-4 Turbo')
+      params.model = MODELS.GPT_4_TURBO
+      const fallbackResult = await client.chat.completions.create(params)
+      return fallbackResult as OpenAI.Chat.Completions.ChatCompletion
+    }
+    
+    throw error
+  }
+}
+
+/**
+ * Streaming chat completion
+ */
+export async function createStreamingCompletion(
+  messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+  options: {
+    model?: ModelType
+    temperature?: number
+    maxTokens?: number
+    userId?: string
+  } = {}
+): Promise<AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>> {
+  const client = getOpenAIClient()
+  
+  const params: OpenAI.Chat.Completions.ChatCompletionCreateParams = {
+    model: options.model || MODELS.GPT_5,
+    messages,
+    temperature: options.temperature ?? 0.7,
+    max_tokens: options.maxTokens || 1500,
+    stream: true,
+    user: options.userId,
+  }
+  
+  try {
+    return await client.chat.completions.create(params)
+  } catch (error) {
+    console.error('OpenAI streaming error:', error)
+    
+    // Fallback to GPT-4 if GPT-5 fails
+    if (params.model === MODELS.GPT_5) {
+      console.log('Falling back to GPT-4 Turbo for streaming')
+      params.model = MODELS.GPT_4_TURBO
+      return await client.chat.completions.create(params)
+    }
+    
+    throw error
+  }
+}
+
+/**
+ * Generate embeddings using OpenAI's latest embedding model
  */
 export async function generateEmbeddings(
   texts: string[],
-  model: string = 'text-embedding-ada-002'
+  model: ModelType = MODELS.EMBEDDING
 ): Promise<number[][]> {
   const client = getOpenAIClient()
 
@@ -44,7 +194,7 @@ export async function generateEmbeddings(
  */
 export async function generateEmbedding(
   text: string,
-  model: string = 'text-embedding-ada-002'
+  model: ModelType = MODELS.EMBEDDING
 ): Promise<number[]> {
   const embeddings = await generateEmbeddings([text], model)
   return embeddings[0]
@@ -56,7 +206,7 @@ export async function generateEmbedding(
 export async function generateSummary(
   content: string,
   maxLength: number = 100,
-  model: string = 'gpt-4'
+  model: ModelType = MODELS.GPT_5
 ): Promise<string> {
   const client = getOpenAIClient()
 
@@ -103,7 +253,7 @@ export async function generateSummary(
  */
 export async function analyzeEmotionalContent(
   content: string,
-  model: string = 'gpt-4'
+  model: ModelType = MODELS.GPT_5
 ): Promise<{
   sensitivity: 'low' | 'medium' | 'high' | 'critical';
   therapeuticRelevance: number;

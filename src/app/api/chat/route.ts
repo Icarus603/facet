@@ -10,7 +10,7 @@ import { z } from 'zod'
 import { v4 as uuidv4 } from 'uuid'
 
 import { ExecutionPlanner } from '@/lib/agents/orchestrator/execution-planner'
-import { FACETWorkflows, FACETState } from '@/lib/agents/orchestrator/langraph-workflows'
+import { simplifiedLangGraphOrchestrator } from '@/lib/agents/orchestrator/simplified-langgraph-orchestrator'
 import { ReasoningLogger } from '@/lib/agents/orchestrator/reasoning-logger'
 import { WebSocketBroadcaster } from '@/app/api/ws/route'
 import { securityMiddleware } from '@/lib/security/security-middleware'
@@ -42,12 +42,18 @@ const ChatRequestSchema = z.object({
 
 // Initialize orchestration components
 const executionPlanner = new ExecutionPlanner()
-const facetWorkflows = new FACETWorkflows()
 
 export async function POST(request: NextRequest) {
   const startTime = Date.now()
   const messageId = uuidv4()
   const reasoningLogger = new ReasoningLogger()
+
+  console.log('🚀 API CHAT REQUEST RECEIVED:', {
+    method: request.method,
+    url: request.url,
+    messageId,
+    timestamp: new Date().toISOString()
+  })
 
   try {
     // 1. Apply security middleware
@@ -181,8 +187,13 @@ export async function POST(request: NextRequest) {
       chatRequest.userPreferences
     )
 
-    // 2. Calculate timeout based on plan and preferences
-    const timeoutMs = executionPlanner.getTimeoutForPlan(executionPlan, chatRequest.userPreferences)
+    // 2. Log execution plan for monitoring
+    console.log('📋 Execution plan:', {
+      strategy: executionPlan.strategy,
+      baseEstimate: executionPlan.estimatedTimeMs,
+      processingSpeed: chatRequest.userPreferences?.processingSpeed,
+      agentsToInvoke: executionPlan.agentsToInvoke
+    })
 
     // 2.1. Notify WebSocket clients of orchestration start
     WebSocketBroadcaster.notifyOrchestrationStart(userId, conversationId, {
@@ -192,183 +203,43 @@ export async function POST(request: NextRequest) {
       executionPattern: executionPlan.executionPattern
     })
 
-    // 3. Prepare initial state for LangGraph workflow
-    const initialState: FACETState = {
-      userMessage: chatRequest.message,
-      userId,
-      messageId,
-      conversationId,
-      userPreferences: chatRequest.userPreferences,
-      urgencyLevel: chatRequest.urgencyLevel === 'crisis' ? 'crisis' : 
-                    chatRequest.urgencyLevel === 'elevated' ? 'elevated' : 'normal',
-      orchestrationLog: [],
-      agentResults: [],
-      executionPlan,
-      startTime
-    }
+    // FACETOrchestrator will handle all the state management internally
 
-    // 4. Execute workflow with timeout
-    let finalState: FACETState
+    // 4. Execute orchestrator - let therapeutic responses complete naturally
+    let orchestratorResponse: ChatResponse
     try {
-      finalState = await Promise.race([
-        facetWorkflows.executeWorkflow(initialState),
-        new Promise<never>((_, reject) => 
-          setTimeout(() => reject(new Error('ORCHESTRATION_TIMEOUT')), timeoutMs)
-        )
-      ])
+      orchestratorResponse = await simplifiedLangGraphOrchestrator.processMessage(chatRequest, userId)
     } catch (error) {
-      if (error instanceof Error && error.message === 'ORCHESTRATION_TIMEOUT') {
-        return NextResponse.json({
-          error: {
-            code: 'ORCHESTRATION_TIMEOUT',
-            message: 'Response took too long to generate',
-            details: `Exceeded ${timeoutMs}ms timeout`,
-            recoveryOptions: ['try_again', 'simplify_message', 'use_fast_mode'],
-            fallbackResponse: "I'm here to help, but I'm having trouble processing your message right now. Could you try rephrasing or asking something simpler?"
-          },
-          metadata: {
-            requestId: messageId,
-            timestamp: new Date().toISOString(),
-            errorSeverity: 'medium'
-          }
-        } as APIErrorResponse, { status: 206 }) // Partial content
-      }
       throw error
     }
 
-    // 5. Emergency detection and intervention
-    let emergencyResponse = null
-    if (finalState.riskAssessment || finalState.emotionalState) {
-      try {
-        const { emergencyInterventionService } = await import('@/lib/emergency/emergency-intervention-service')
-        
-        // Prepare conversation context for emergency analysis
-        const conversationContext = {
-          messages: [chatRequest.message],
-          emotionalState: finalState.emotionalState,
-          riskAssessment: finalState.riskAssessment
-        }
-        
-        // Detect emergency
-        emergencyResponse = await emergencyInterventionService.detectAndRespondToEmergency(
-          userId,
-          conversationContext,
-          securityContext.clientIP
-        )
-        
-        // If emergency detected, modify response and add emergency guidance
-        if (emergencyResponse.emergencyDetected) {
-          reasoningLogger.logDecision(
-            'emergency_detected',
-            `Mental health emergency detected: ${emergencyResponse.emergencyLevel}`,
-            `Emergency interventions triggered: ${emergencyResponse.interventionsTriggered.join(', ')}`,
-            {
-              emergencyLevel: emergencyResponse.emergencyLevel,
-              incidentId: emergencyResponse.incidentId,
-              interventionsTriggered: emergencyResponse.interventionsTriggered
-            },
-            0.95
-          )
-          
-          // Prepend emergency guidance to response
-          const emergencyGuidance = getEmergencyGuidanceMessage(emergencyResponse.emergencyLevel!)
-          finalState.finalResponse = `${emergencyGuidance}\n\n${finalState.finalResponse}`
-          
-          // Add emergency flags to warning flags
-          finalState.warningFlags = [
-            ...(finalState.warningFlags || []),
-            'emergency_detected',
-            'crisis_protocol'
-          ]
-        }
-      } catch (emergencyError) {
-        console.error('Emergency detection error:', emergencyError)
-        // Don't fail the chat response if emergency detection fails
-        reasoningLogger.logDecision(
-          'emergency_detection_error',
-          'Emergency detection system error',
-          emergencyError instanceof Error ? emergencyError.message : 'Unknown error',
-          { error: emergencyError },
-          0.1
-        )
-      }
-    }
+    // FACETOrchestrator has already handled emergency detection and all orchestration logic
 
-    // 6. Log response synthesis
-    reasoningLogger.logResponseSynthesis(
-      finalState.agentResults,
-      finalState.responseConfidence || 0.8,
-      'Successfully synthesized multi-agent response with quality assurance'
-    )
-
-    // 6. Generate orchestration transparency data
+    // FACETOrchestrator has already built the complete ChatResponse
     const totalTimeMs = Date.now() - startTime
-    const orchestrationData = chatRequest.userPreferences?.agentVisibility !== false ? 
-      reasoningLogger.generateOrchestrationData(
-        executionPlan,
-        finalState.orchestrationLog,
-        finalState.agentResults,
-        totalTimeMs,
-        finalState.responseConfidence || 0.8
-      ) : null
+    
+    // Update timing metadata to reflect actual processing time
+    orchestratorResponse.metadata.processingTimeMs = totalTimeMs
 
-    // 7. Prepare final response
-    const response: ChatResponse = {
-      content: finalState.finalResponse || "I'm here to support you. How are you feeling right now?",
+    // 🔍 CRITICAL DEBUG: Log exact response content before returning
+    console.log('🚨 CRITICAL API RESPONSE DEBUG:', {
       messageId,
-      conversationId,
-      orchestration: orchestrationData,
-      metadata: {
-        timestamp: new Date().toISOString(),
-        processingTimeMs: totalTimeMs,
-        agentVersion: 'facet-orchestrator-v2.0',
-        responseConfidence: finalState.responseConfidence || 0.8,
-        recommendedFollowUp: finalState.recommendedFollowUp || [],
-        warningFlags: finalState.warningFlags || [],
-        
-        // Include emotional state if available
-        emotionalState: finalState.emotionalState ? {
-          valence: finalState.emotionalState.valence,
-          arousal: finalState.emotionalState.arousal,
-          dominance: finalState.emotionalState.dominance,
-          confidence: finalState.emotionalState.confidence,
-          primaryEmotion: finalState.emotionalState.primaryEmotion,
-          intensity: finalState.emotionalState.intensity
-        } : undefined,
-        
-        // Include risk assessment if available
-        riskAssessment: finalState.riskAssessment ? {
-          level: finalState.riskAssessment.level,
-          immediateInterventionRequired: finalState.riskAssessment.immediateInterventionRequired,
-          professionalReferralRecommended: finalState.riskAssessment.professionalReferralRecommended,
-          emergencyContactTriggered: finalState.riskAssessment.emergencyContactTriggered,
-          reasoning: finalState.riskAssessment.reasoning
-        } : undefined,
-        
-        // Include emergency response if triggered
-        emergencyResponse: emergencyResponse?.emergencyDetected ? {
-          emergencyDetected: true,
-          emergencyLevel: emergencyResponse.emergencyLevel,
-          incidentId: emergencyResponse.incidentId,
-          interventionsTriggered: emergencyResponse.interventionsTriggered,
-          immediateActions: emergencyResponse.immediateActions,
-          professionalContactInfo: emergencyResponse.professionalContactInfo?.map(service => ({
-            name: service.name,
-            phone: service.phone,
-            serviceType: service.serviceType,
-            available24_7: service.available24_7
-          }))
-        } : undefined
-      }
-    }
+      hasContent: !!orchestratorResponse.content,
+      contentType: typeof orchestratorResponse.content,
+      contentLength: orchestratorResponse.content?.length,
+      actualContent: orchestratorResponse.content,
+      orchestrationPresent: !!orchestratorResponse.orchestration,
+      metadataPresent: !!orchestratorResponse.metadata,
+      responseStructure: Object.keys(orchestratorResponse)
+    })
 
     // 8. Notify WebSocket clients of orchestration completion
     WebSocketBroadcaster.notifyOrchestrationComplete(userId, conversationId, {
       totalTimeMs,
-      finalConfidence: finalState.responseConfidence || 0.8,
-      agentsCompleted: finalState.agentResults.filter(r => r.success).length,
-      agentsFailed: finalState.agentResults.filter(r => !r.success).length,
-      response: finalState.finalResponse || "I'm here to support you."
+      finalConfidence: orchestratorResponse.metadata.responseConfidence,
+      agentsCompleted: orchestratorResponse.orchestration?.agentResults?.filter(r => r.success).length || 0,
+      agentsFailed: orchestratorResponse.orchestration?.agentResults?.filter(r => !r.success).length || 0,
+      response: orchestratorResponse.content
     })
 
     // 8.1. Audit log for orchestration completion
@@ -382,11 +253,11 @@ export async function POST(request: NextRequest) {
         userAgent: securityContext.userAgent,
         riskLevel: inputValidationResult.riskLevel,
         securityFlags: inputValidationResult.securityFlags.map(f => f.type),
-        orchestrationData: orchestrationData,
+        orchestrationData: orchestratorResponse.orchestration,
         processingTimeMs: totalTimeMs,
-        agentsInvolved: finalState.agentResults.map(r => r.agentName),
-        emergencyProtocolTriggered: finalState.riskAssessment?.immediateInterventionRequired || false,
-        professionalReferralMade: finalState.riskAssessment?.professionalReferralRecommended || false
+        agentsInvolved: orchestratorResponse.orchestration?.agentResults?.map(r => r.agentName) || [],
+        emergencyProtocolTriggered: orchestratorResponse.metadata.riskAssessment?.immediateInterventionRequired || false,
+        professionalReferralMade: orchestratorResponse.metadata.riskAssessment?.professionalReferralRecommended || false
       }
     )
 
@@ -396,9 +267,10 @@ export async function POST(request: NextRequest) {
       conversationId, 
       messageId, 
       chatRequest, 
-      response,
+      orchestratorResponse,
       inputValidationResult.securityFlags,
-      securityContext.riskLevel
+      securityContext.riskLevel,
+      securityContext
     )
 
     // 10. Check SLA compliance and log performance
@@ -407,7 +279,7 @@ export async function POST(request: NextRequest) {
       console.warn(`SLA violation: ${executionPlan.strategy} took ${totalTimeMs}ms, expected <${executionPlan.estimatedTimeMs}ms`)
     }
 
-    return NextResponse.json(response)
+    return NextResponse.json(orchestratorResponse)
 
   } catch (error) {
     console.error('Chat API error:', error)
@@ -458,7 +330,8 @@ async function storeSecureConversationMessage(
   request: ChatRequest,
   response: ChatResponse,
   securityFlags: any[],
-  riskLevel: string
+  riskLevel: string,
+  securityContext: any
 ): Promise<void> {
   try {
     // Encrypt user message
@@ -510,8 +383,8 @@ async function storeSecureConversationMessage(
       conversationId,
       messageId,
       {
-        clientIP: request.headers.get('x-forwarded-for')?.split(',')[0] || 'unknown',
-        userAgent: request.headers.get('user-agent') || 'unknown',
+        clientIP: securityContext.clientIP || 'unknown',
+        userAgent: securityContext.userAgent || 'unknown',
         riskLevel: riskLevel as any,
         securityFlags: securityFlags.map(f => f.type)
       }

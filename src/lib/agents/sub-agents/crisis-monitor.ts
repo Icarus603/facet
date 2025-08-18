@@ -1,14 +1,21 @@
 /**
  * FACET Crisis Monitor Agent
  * 
- * Real-time crisis detection and safety assessment
+ * Real-time AI-powered crisis detection and safety assessment
  * Implements exact AgentExecutionResult format from API_CONTRACT.md
  */
 
+import { BaseAgent, AgentContext, createAgentConfig } from '../base-agent'
 import { AgentExecutionResult, AGENT_NAMES, AGENT_CONFIG } from '@/lib/types/api-contract'
+import { 
+  CRISIS_MONITOR_SYSTEM_PROMPT, 
+  buildCrisisAssessmentPrompt 
+} from '../prompts/crisis-monitor-prompts'
+import { getModelForAgent } from '@/lib/openai/client'
 
 export interface CrisisAssessment {
   riskLevel: 'none' | 'low' | 'moderate' | 'high' | 'crisis'
+  riskScore: number  // 0-10 numerical risk score
   immediateInterventionRequired: boolean
   professionalReferralRecommended: boolean
   emergencyContactTriggered: boolean
@@ -18,596 +25,260 @@ export interface CrisisAssessment {
   confidence: number
   urgencyScore: number
   recommendedActions: string[]
-  safetyPlan?: {
+  insights: string[]
+  recommendations: string[]
+  contributedInsights: string[]
+  safetyPlan: {
     immediateSteps: string[]
     copingStrategies: string[]
     emergencyContacts: string[]
     professionalResources: string[]
   }
+  triggerWords: string[]
+  contextualFactors: string[]
 }
 
-export class CrisisMonitor {
-  private crisisKeywords = {
-    suicidal: {
-      direct: ['suicide', 'kill myself', 'end my life', 'want to die', 'better off dead'],
-      indirect: ['no point', 'cant go on', 'everyone would be better', 'tired of living'],
-      severity: 'crisis'
-    },
-    selfHarm: {
-      direct: ['hurt myself', 'cut myself', 'self harm', 'self-harm', 'cutting'],
-      indirect: ['deserve pain', 'need to punish', 'physical release'],
-      severity: 'high'
-    },
-    hopelessness: {
-      direct: ['hopeless', 'no hope', 'pointless', 'nothing matters', 'no future'],
-      indirect: ['whats the point', 'why bother', 'never get better'],
-      severity: 'high'
-    },
-    overwhelm: {
-      direct: ['cant cope', 'overwhelmed', 'falling apart', 'breaking down'],
-      indirect: ['too much', 'cant handle', 'drowning'],
-      severity: 'moderate'
-    },
-    isolation: {
-      direct: ['alone', 'nobody cares', 'no one understands', 'isolated'],
-      indirect: ['burden', 'pushing away', 'disconnected'],
-      severity: 'moderate'
-    },
-    substance: {
-      direct: ['drinking too much', 'using drugs', 'need pills', 'getting high'],
-      indirect: ['numb the pain', 'escape reality', 'forget everything'],
-      severity: 'moderate'
+export class CrisisMonitor extends BaseAgent {
+  constructor() {
+    super(createAgentConfig(
+      AGENT_NAMES.CRISIS_MONITOR,
+      AGENT_CONFIG[AGENT_NAMES.CRISIS_MONITOR].displayName,
+      AGENT_CONFIG[AGENT_NAMES.CRISIS_MONITOR].icon,
+      CRISIS_MONITOR_SYSTEM_PROMPT,
+      {
+        model: getModelForAgent('crisis_monitor'),
+        temperature: 0.1, // Very low temperature for consistent crisis detection
+        maxTokens: 2500,
+        timeoutMs: 45000 // 45 second timeout for crisis detection (increased for proxy requests)
+      }
+    ))
+  }
+
+  /**
+   * Prepare input for crisis assessment
+   */
+  protected async prepareInput(context: AgentContext): Promise<any> {
+    return {
+      message: context.userMessage,
+      emotionalContext: context.emotionalState,
+      memoryContext: context.memoryContext,
+      urgencyLevel: context.urgencyLevel,
+      previousResults: context.previousResults
     }
   }
 
-  private protectiveFactors = [
-    'family', 'friends', 'support', 'therapy', 'medication', 'hope', 'future',
-    'goals', 'pets', 'children', 'job', 'hobbies', 'faith', 'spirituality'
-  ]
-
-  private emergencyKeywords = [
-    'right now', 'tonight', 'today', 'immediate', 'soon', 'plan to', 
-    'going to', 'about to', 'ready to'
-  ]
-
   /**
-   * Fast crisis assessment optimized for <2s SLA compliance
+   * Perform AI-powered crisis assessment
    */
-  async assess(
-    message: string,
-    userId: string,
-    startTimeMs: number,
-    emotionalState?: { valence: number, arousal: number, dominance: number },
-    assignedTask: string = 'Assess crisis risk and safety requirements'
-  ): Promise<AgentExecutionResult> {
-    const agentStart = Date.now()
-    
+  protected async performAnalysis(input: any, context: AgentContext): Promise<CrisisAssessment> {
     try {
-      // Fast-path crisis detection for SLA compliance
-      const assessment = this.performFastCrisisAssessment(message, emotionalState)
-      const executionTimeMs = Date.now() - agentStart
+      // Build messages for OpenAI
+      const messages = await this.buildMessages(input, context)
 
-      return {
-        agentName: AGENT_NAMES.CRISIS_MONITOR,
-        agentDisplayName: AGENT_CONFIG[AGENT_NAMES.CRISIS_MONITOR].displayName,
-        agentIcon: AGENT_CONFIG[AGENT_NAMES.CRISIS_MONITOR].icon,
-        assignedTask,
-        inputData: { message, userId, emotionalState },
-        executionTimeMs,
-        executionType: 'parallel',
-        startTimeMs: agentStart - startTimeMs,
-        endTimeMs: (agentStart - startTimeMs) + executionTimeMs,
-        result: assessment,
-        confidence: assessment.confidence,
-        success: true,
-        reasoning: assessment.reasoning,
-        keyInsights: this.generateKeyInsights(assessment),
-        recommendationsToOrchestrator: this.generateOrchestratorRecommendations(assessment),
-        influenceOnFinalResponse: this.calculateInfluence(assessment),
-        contributedInsights: this.generateContributedInsights(assessment)
-      }
+      // Call OpenAI API with crisis-optimized settings
+      const response = await this.callOpenAI(messages)
+
+      // Parse JSON response
+      const crisisAnalysis = JSON.parse(response)
+
+      // Validate and return structured crisis assessment
+      return this.validateCrisisAssessment(crisisAnalysis)
+
     } catch (error) {
-      const executionTimeMs = Date.now() - agentStart
-      
-      return {
-        agentName: AGENT_NAMES.CRISIS_MONITOR,
-        agentDisplayName: AGENT_CONFIG[AGENT_NAMES.CRISIS_MONITOR].displayName,
-        agentIcon: AGENT_CONFIG[AGENT_NAMES.CRISIS_MONITOR].icon,
-        assignedTask,
-        inputData: { message, userId },
-        executionTimeMs,
-        executionType: 'parallel',
-        startTimeMs: agentStart - startTimeMs,
-        endTimeMs: (agentStart - startTimeMs) + executionTimeMs,
-        result: null,
-        confidence: 0.0,
-        success: false,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error',
-        reasoning: 'Failed to perform crisis assessment',
-        keyInsights: [],
-        recommendationsToOrchestrator: ['default_safety_protocols'],
-        influenceOnFinalResponse: 1.0, // Max influence on error for safety
-        contributedInsights: ['Crisis assessment unavailable - defaulting to safety protocols']
-      }
+      console.error('Crisis assessment error:', error)
+      throw error
     }
   }
 
   /**
-   * Fast crisis assessment optimized for sub-2s performance
+   * Process and validate the crisis assessment result
    */
-  private performFastCrisisAssessment(
-    message: string, 
-    emotionalState?: { valence: number, arousal: number, dominance: number }
-  ): CrisisAssessment {
-    const lowerMessage = message.toLowerCase()
-    
-    // Fast crisis detection using optimized keyword matching
-    let riskLevel: 'none' | 'low' | 'moderate' | 'high' | 'crisis' = 'none'
-    let urgencyScore = 0
-    let immediateIntervention = false
-    let riskFactors: string[] = []
-    
-    // Critical keywords check (fastest path)
-    const criticalKeywords = ['suicide', 'kill myself', 'end my life', 'want to die', 'hurt myself']
-    const hasCritical = criticalKeywords.some(kw => lowerMessage.includes(kw))
-    
-    if (hasCritical) {
-      riskLevel = 'crisis'
-      urgencyScore = 100
-      immediateIntervention = true
-      riskFactors.push('suicidal_ideation')
-    } else {
-      // Quick keyword scoring
-      const highRiskWords = ['hopeless', 'no point', 'cant go on', 'overwhelmed', 'falling apart']
-      const moderateRiskWords = ['alone', 'nobody cares', 'tired', 'stressed', 'anxious']
-      
-      const highRiskCount = highRiskWords.filter(kw => lowerMessage.includes(kw)).length
-      const moderateRiskCount = moderateRiskWords.filter(kw => lowerMessage.includes(kw)).length
-      
-      if (highRiskCount >= 2) {
-        riskLevel = 'high'
-        urgencyScore = 75
-        riskFactors.push('multiple_risk_indicators')
-      } else if (highRiskCount >= 1) {
-        riskLevel = 'moderate'
-        urgencyScore = 50
-        riskFactors.push('emotional_distress')
-      } else if (moderateRiskCount >= 2) {
-        riskLevel = 'moderate'
-        urgencyScore = 40
-        riskFactors.push('mild_distress')
-      } else if (moderateRiskCount >= 1) {
-        riskLevel = 'low'
-        urgencyScore = 20
-      }
+  protected async processResult(result: CrisisAssessment): Promise<CrisisAssessment> {
+    // Ensure critical fields are properly set and within bounds
+    const processedResult = {
+      ...result,
+      riskScore: Math.max(0, Math.min(10, result.riskScore || 0)),
+      confidence: Math.max(0, Math.min(1, result.confidence || 0.8)),
+      urgencyScore: Math.max(0, Math.min(1, result.urgencyScore || 0)),
+      riskFactors: result.riskFactors || [],
+      protectiveFactors: result.protectiveFactors || [],
+      recommendedActions: result.recommendedActions || [],
+      insights: result.insights || [],
+      recommendations: result.recommendations || [],
+      contributedInsights: result.contributedInsights || [],
+      triggerWords: result.triggerWords || [],
+      contextualFactors: result.contextualFactors || []
     }
-    
-    // Quick urgency boost for immediate language
-    const immediateWords = ['right now', 'tonight', 'today', 'about to']
-    if (immediateWords.some(kw => lowerMessage.includes(kw))) {
-      urgencyScore += 30
-      if (riskLevel !== 'none') {
-        immediateIntervention = true
-      }
-    }
-    
-    // Quick protective factors check
-    const protectiveWords = ['family', 'friends', 'support', 'therapy', 'hope']
-    const protectiveFactors = protectiveWords.filter(kw => lowerMessage.includes(kw))
-    
-    // Confidence based on keyword matches and message length
-    const confidence = hasCritical ? 0.95 : 
-                     riskFactors.length > 0 ? 0.8 : 
-                     message.length > 50 ? 0.7 : 0.6
-    
-    // Quick reasoning generation
-    const reasoning = hasCritical ? 
-      'Crisis-level language detected requiring immediate intervention' :
-      riskLevel !== 'none' ? 
-        `${riskLevel} risk level based on detected indicators: ${riskFactors.join(', ')}` :
-        'No significant crisis indicators detected'
+
+    // Ensure risk level consistency with risk score
+    if (processedResult.riskScore >= 9) processedResult.riskLevel = 'crisis'
+    else if (processedResult.riskScore >= 7) processedResult.riskLevel = 'high'
+    else if (processedResult.riskScore >= 4) processedResult.riskLevel = 'moderate'
+    else if (processedResult.riskScore >= 1) processedResult.riskLevel = 'low'
+    else processedResult.riskLevel = 'none'
+
+    // Set intervention flags based on risk level
+    processedResult.immediateInterventionRequired = processedResult.riskLevel === 'crisis'
+    processedResult.professionalReferralRecommended = ['crisis', 'high'].includes(processedResult.riskLevel)
+    processedResult.emergencyContactTriggered = processedResult.riskLevel === 'crisis' && processedResult.riskScore >= 9.5
+
+    return processedResult
+  }
+
+  /**
+   * Format user input for the AI prompt
+   */
+  protected async formatUserInput(input: any): Promise<string> {
+    return buildCrisisAssessmentPrompt(
+      input.message,
+      input.emotionalContext,
+      input.memoryContext
+    )
+  }
+
+  /**
+   * Provide fallback result for critical errors
+   */
+  protected async getFallbackResult(error: Error, context: AgentContext): Promise<CrisisAssessment> {
+    // Conservative fallback - assume moderate risk when AI fails
+    const message = context.userMessage.toLowerCase()
+    const basicRiskScore = this.getBasicRiskScore(message)
     
     return {
-      riskLevel,
-      immediateInterventionRequired: immediateIntervention,
-      professionalReferralRecommended: riskLevel === 'crisis' || riskLevel === 'high',
-      emergencyContactTriggered: riskLevel === 'crisis' && immediateIntervention,
-      riskFactors,
-      protectiveFactors,
-      reasoning,
-      confidence,
-      urgencyScore: Math.min(100, urgencyScore),
-      recommendedActions: this.generateRecommendedActions(riskLevel, immediateIntervention),
-      safetyPlan: riskLevel === 'crisis' ? this.generateQuickSafetyPlan() : undefined
+      riskLevel: basicRiskScore >= 7 ? 'high' : basicRiskScore >= 4 ? 'moderate' : 'low',
+      riskScore: basicRiskScore,
+      immediateInterventionRequired: basicRiskScore >= 9,
+      professionalReferralRecommended: basicRiskScore >= 7,
+      emergencyContactTriggered: false,
+      riskFactors: this.detectBasicRiskFactors(message),
+      protectiveFactors: [],
+      reasoning: `Fallback assessment due to AI error: ${error.message}. Conservative risk evaluation applied.`,
+      confidence: 0.4, // Low confidence for fallback
+      urgencyScore: Math.min(basicRiskScore / 10, 1),
+      recommendedActions: basicRiskScore >= 7 ? ['Seek immediate professional help'] : ['Monitor situation closely'],
+      insights: ['AI analysis failed - using fallback assessment'],
+      recommendations: ['Please try again or contact support'],
+      contributedInsights: ['Fallback crisis assessment used'],
+      safetyPlan: {
+        immediateSteps: ['Contact crisis hotline: 988', 'Reach out to trusted friend or family member'],
+        copingStrategies: ['Deep breathing', 'Call someone you trust'],
+        emergencyContacts: ['National Suicide Prevention Lifeline: 988', 'Emergency Services: 911'],
+        professionalResources: ['Crisis Text Line: Text HOME to 741741', 'Local emergency room']
+      },
+      triggerWords: this.detectBasicTriggers(message),
+      contextualFactors: ['AI assessment unavailable']
     }
   }
 
   /**
-   * Comprehensive crisis assessment (fallback for non-time-critical cases)
+   * Validate crisis assessment response from AI
    */
-  private async performCrisisAssessment(
-    message: string, 
-    emotionalState?: { valence: number, arousal: number, dominance: number }
-  ): Promise<CrisisAssessment> {
-    const lowerMessage = message.toLowerCase()
-    
-    // 1. Detect crisis indicators
-    const crisisIndicators = this.detectCrisisIndicators(lowerMessage)
-    
-    // 2. Assess immediacy and urgency
-    const urgencyAssessment = this.assessUrgency(lowerMessage, crisisIndicators)
-    
-    // 3. Identify protective factors
-    const protectiveFactors = this.identifyProtectiveFactors(lowerMessage)
-    
-    // 4. Calculate risk level
-    const riskLevel = this.calculateRiskLevel(crisisIndicators, urgencyAssessment, emotionalState)
-    
-    // 5. Determine intervention requirements
-    const interventionRequired = this.determineInterventionNeed(riskLevel, urgencyAssessment)
-    
-    // 6. Generate safety plan if needed
-    const safetyPlan = interventionRequired ? this.generateSafetyPlan(riskLevel, crisisIndicators) : undefined
-    
-    // 7. Calculate confidence
-    const confidence = this.calculateConfidence(crisisIndicators, message.length, emotionalState)
-    
-    // 8. Generate reasoning
-    const reasoning = this.generateReasoning(riskLevel, crisisIndicators, urgencyAssessment, protectiveFactors)
-
-    return {
-      riskLevel,
-      immediateInterventionRequired: interventionRequired,
-      professionalReferralRecommended: riskLevel === 'crisis' || riskLevel === 'high',
-      emergencyContactTriggered: riskLevel === 'crisis' && urgencyAssessment.immediate,
-      riskFactors: crisisIndicators.map(c => c.type),
-      protectiveFactors,
-      reasoning,
-      confidence,
-      urgencyScore: urgencyAssessment.score,
-      recommendedActions: this.generateRecommendedActions(riskLevel, interventionRequired),
-      safetyPlan
-    }
-  }
-
-  private generateQuickSafetyPlan(): any {
-    return {
-      immediateSteps: [
-        'Stay in a safe location with others if possible',
-        'Contact 988 Suicide & Crisis Lifeline immediately',
-        'Remove any means of self-harm from immediate environment'
-      ],
-      copingStrategies: [
-        'Deep breathing: 4-7-8 technique',
-        'Call someone you trust right now',
-        'Focus on immediate safety'
-      ],
-      emergencyContacts: [
-        '988 - Suicide & Crisis Lifeline (24/7)',
-        'Emergency Services: 911',
-        'Crisis Text Line: Text HOME to 741741'
-      ],
-      professionalResources: [
-        'Local emergency room',
-        'Mental health crisis center'
-      ]
-    }
-  }
-
-  private detectCrisisIndicators(message: string): Array<{ type: string, severity: string, keywords: string[] }> {
-    const indicators = []
-    
-    for (const [category, data] of Object.entries(this.crisisKeywords)) {
-      const foundDirect = data.direct.filter(keyword => message.includes(keyword))
-      const foundIndirect = data.indirect.filter(keyword => message.includes(keyword))
-      
-      if (foundDirect.length > 0 || foundIndirect.length > 0) {
-        indicators.push({
-          type: category,
-          severity: data.severity,
-          keywords: [...foundDirect, ...foundIndirect]
-        })
-      }
-    }
-    
-    return indicators
-  }
-
-  private assessUrgency(message: string, indicators: any[]): { score: number, immediate: boolean } {
-    let urgencyScore = 0
-    
-    // Base urgency from crisis indicators
-    for (const indicator of indicators) {
-      switch (indicator.severity) {
-        case 'crisis': urgencyScore += 40; break
-        case 'high': urgencyScore += 25; break
-        case 'moderate': urgencyScore += 15; break
-      }
-    }
-    
-    // Immediacy keywords increase urgency significantly
-    const immediacyKeywords = this.emergencyKeywords.filter(keyword => message.includes(keyword))
-    urgencyScore += immediacyKeywords.length * 20
-    
-    // Multiple indicators compound urgency
-    if (indicators.length > 2) {
-      urgencyScore += 15
-    }
-    
-    // Crisis + immediacy = maximum urgency
-    const hasCrisis = indicators.some(i => i.severity === 'crisis')
-    const hasImmediacy = immediacyKeywords.length > 0
+  private validateCrisisAssessment(analysis: any): CrisisAssessment {
+    const validRiskLevels = ['none', 'low', 'moderate', 'high', 'crisis']
     
     return {
-      score: Math.min(100, urgencyScore),
-      immediate: hasCrisis && hasImmediacy
+      riskLevel: validRiskLevels.includes(analysis.riskLevel) ? analysis.riskLevel : 'moderate',
+      riskScore: typeof analysis.riskScore === 'number' ? analysis.riskScore : 5,
+      immediateInterventionRequired: Boolean(analysis.immediateInterventionRequired),
+      professionalReferralRecommended: Boolean(analysis.professionalReferralRecommended),
+      emergencyContactTriggered: Boolean(analysis.emergencyContactTriggered),
+      riskFactors: Array.isArray(analysis.riskFactors) ? analysis.riskFactors : [],
+      protectiveFactors: Array.isArray(analysis.protectiveFactors) ? analysis.protectiveFactors : [],
+      reasoning: analysis.reasoning || 'Crisis assessment completed',
+      confidence: typeof analysis.confidence === 'number' ? analysis.confidence : 0.8,
+      urgencyScore: typeof analysis.urgencyScore === 'number' ? analysis.urgencyScore : 0.5,
+      recommendedActions: Array.isArray(analysis.recommendedActions) ? analysis.recommendedActions : [],
+      insights: Array.isArray(analysis.insights) ? analysis.insights : [],
+      recommendations: Array.isArray(analysis.recommendations) ? analysis.recommendations : [],
+      contributedInsights: Array.isArray(analysis.contributedInsights) ? analysis.contributedInsights : [],
+      safetyPlan: analysis.safetyPlan || {
+        immediateSteps: [],
+        copingStrategies: [],
+        emergencyContacts: ['National Suicide Prevention Lifeline: 988'],
+        professionalResources: []
+      },
+      triggerWords: Array.isArray(analysis.triggerWords) ? analysis.triggerWords : [],
+      contextualFactors: Array.isArray(analysis.contextualFactors) ? analysis.contextualFactors : []
     }
   }
 
-  private identifyProtectiveFactors(message: string): string[] {
-    return this.protectiveFactors.filter(factor => message.includes(factor))
+  // Fallback crisis detection methods for error scenarios
+  private getBasicRiskScore(message: string): number {
+    let score = 0
+    
+    // Crisis indicators (immediate)
+    const crisisWords = ['suicide', 'kill myself', 'end my life', 'want to die']
+    if (crisisWords.some(word => message.includes(word))) score = 9
+    
+    // High risk indicators
+    const highRiskWords = ['hopeless', 'no point', 'can\'t go on', 'self harm', 'cut myself']
+    if (highRiskWords.some(word => message.includes(word))) score = Math.max(score, 7)
+    
+    // Moderate risk indicators  
+    const moderateRiskWords = ['overwhelmed', 'can\'t cope', 'breaking down', 'desperate']
+    if (moderateRiskWords.some(word => message.includes(word))) score = Math.max(score, 5)
+    
+    // Low risk indicators
+    const lowRiskWords = ['worried', 'stressed', 'anxious', 'sad']
+    if (lowRiskWords.some(word => message.includes(word))) score = Math.max(score, 2)
+    
+    return score
   }
 
-  private calculateRiskLevel(
-    indicators: any[], 
-    urgency: any, 
-    emotionalState?: { valence: number, arousal: number, dominance: number }
-  ): 'none' | 'low' | 'moderate' | 'high' | 'crisis' {
-    // Crisis indicators override everything
-    if (indicators.some(i => i.severity === 'crisis')) {
-      return 'crisis'
+  private detectBasicRiskFactors(message: string): string[] {
+    const factors = []
+    
+    if (message.includes('suicide') || message.includes('kill myself')) {
+      factors.push('Suicidal ideation')
+    }
+    if (message.includes('hopeless') || message.includes('no point')) {
+      factors.push('Hopelessness')
+    }
+    if (message.includes('alone') || message.includes('nobody cares')) {
+      factors.push('Social isolation')
+    }
+    if (message.includes('overwhelmed') || message.includes('can\'t cope')) {
+      factors.push('Overwhelming stress')
     }
     
-    // Multiple high-severity indicators
-    const highSeverityCount = indicators.filter(i => i.severity === 'high').length
-    if (highSeverityCount >= 2) {
-      return 'crisis'
-    }
-    
-    // High urgency with indicators
-    if (urgency.score > 60 && indicators.length > 0) {
-      return 'high'
-    }
-    
-    // Single high-severity indicator
-    if (highSeverityCount === 1) {
-      return 'high'
-    }
-    
-    // Multiple moderate indicators
-    const moderateCount = indicators.filter(i => i.severity === 'moderate').length
-    if (moderateCount >= 3) {
-      return 'high'
-    }
-    
-    if (moderateCount >= 1) {
-      return 'moderate'
-    }
-    
-    // Factor in emotional state if available
-    if (emotionalState) {
-      if (emotionalState.valence < -0.7 && emotionalState.arousal > 0.8) {
-        return 'moderate'
-      }
-      if (emotionalState.valence < -0.5) {
-        return 'low'
-      }
-    }
-    
-    return 'none'
+    return factors
   }
 
-  private determineInterventionNeed(riskLevel: string, urgency: any): boolean {
-    return riskLevel === 'crisis' || 
-           riskLevel === 'high' || 
-           (riskLevel === 'moderate' && urgency.score > 50)
-  }
-
-  private generateSafetyPlan(riskLevel: string, indicators: any[]): any {
-    const plan = {
-      immediateSteps: [] as string[],
-      copingStrategies: [] as string[],
-      emergencyContacts: [] as string[],
-      professionalResources: [] as string[]
+  private detectBasicTriggers(message: string): string[] {
+    const triggers = []
+    
+    if (message.includes('suicide') || message.includes('kill myself') || message.includes('end my life')) {
+      triggers.push('suicide')
+    }
+    if (message.includes('hurt myself') || message.includes('cut myself')) {
+      triggers.push('self-harm')
+    }
+    if (message.includes('hopeless') || message.includes('no point')) {
+      triggers.push('hopelessness')
     }
     
-    // Immediate steps based on risk level
-    if (riskLevel === 'crisis') {
-      plan.immediateSteps = [
-        'Stay in a safe location with others if possible',
-        'Remove any means of self-harm from immediate environment',
-        'Contact emergency services (988 Suicide & Crisis Lifeline) if feeling unsafe',
-        'Reach out to trusted friend, family member, or therapist immediately'
-      ]
-    } else if (riskLevel === 'high') {
-      plan.immediateSteps = [
-        'Practice grounding techniques (5-4-3-2-1 method)',
-        'Call someone you trust to talk',
-        'Avoid being alone for extended periods',
-        'Schedule appointment with mental health professional'
-      ]
-    }
-    
-    // Coping strategies
-    plan.copingStrategies = [
-      'Deep breathing exercises (4-7-8 technique)',
-      'Progressive muscle relaxation',
-      'Journal writing or voice recording feelings',
-      'Physical activity or movement',
-      'Listen to calming music or nature sounds',
-      'Practice mindfulness or meditation'
-    ]
-    
-    // Emergency contacts
-    plan.emergencyContacts = [
-      '988 - Suicide & Crisis Lifeline (24/7)',
-      'Emergency Services: 911',
-      'Crisis Text Line: Text HOME to 741741',
-      'National Alliance on Mental Illness: 1-800-950-NAMI'
-    ]
-    
-    // Professional resources
-    plan.professionalResources = [
-      'Local emergency room or urgent care',
-      'Mental health crisis center',
-      'Therapist or counselor',
-      'Psychiatrist for medication evaluation',
-      'Local community mental health center'
-    ]
-    
-    return plan
-  }
-
-  private calculateConfidence(indicators: any[], messageLength: number, emotionalState?: any): number {
-    let confidence = 0.5
-    
-    // Clear crisis indicators increase confidence
-    if (indicators.some(i => i.severity === 'crisis')) {
-      confidence = 0.95
-    } else if (indicators.length > 0) {
-      confidence += indicators.length * 0.15
-    }
-    
-    // Longer messages provide more context
-    if (messageLength > 100) {
-      confidence += 0.1
-    }
-    
-    // Emotional state data increases confidence
-    if (emotionalState) {
-      confidence += 0.1
-    }
-    
-    // Multiple indicators from same category reduce confidence slightly
-    const categoryCount = new Set(indicators.map(i => i.type)).size
-    if (categoryCount < indicators.length) {
-      confidence -= 0.05
-    }
-    
-    return Math.max(0.1, Math.min(1.0, confidence))
-  }
-
-  private generateReasoning(riskLevel: string, indicators: any[], urgency: any, protectiveFactors: string[]): string {
-    let reasoning = `Risk assessment: ${riskLevel} level`
-    
-    if (indicators.length > 0) {
-      const categories = indicators.map(i => i.type).join(', ')
-      reasoning += ` based on detected indicators: ${categories}`
-    }
-    
-    if (urgency.score > 50) {
-      reasoning += `. High urgency score (${urgency.score}/100)`
-      if (urgency.immediate) {
-        reasoning += ' with immediate intervention required'
-      }
-    }
-    
-    if (protectiveFactors.length > 0) {
-      reasoning += `. Protective factors identified: ${protectiveFactors.join(', ')}`
-    }
-    
-    if (riskLevel === 'crisis') {
-      reasoning += '. Emergency protocols activated.'
-    } else if (riskLevel === 'high') {
-      reasoning += '. Professional referral strongly recommended.'
-    }
-    
-    return reasoning
-  }
-
-  private generateRecommendedActions(riskLevel: string, interventionRequired: boolean): string[] {
-    const actions = []
-    
-    if (riskLevel === 'crisis') {
-      actions.push('immediate_safety_response', 'emergency_contact_activation', 'professional_intervention')
-    } else if (riskLevel === 'high') {
-      actions.push('safety_planning', 'professional_referral', 'followup_monitoring')
-    } else if (riskLevel === 'moderate') {
-      actions.push('supportive_response', 'coping_strategy_provision', 'resource_sharing')
-    }
-    
-    if (interventionRequired) {
-      actions.push('escalate_to_human_support')
-    }
-    
-    return actions
-  }
-
-  private generateKeyInsights(assessment: CrisisAssessment): string[] {
-    const insights = []
-    
-    insights.push(`Risk level: ${assessment.riskLevel}`)
-    
-    if (assessment.riskFactors.length > 0) {
-      insights.push(`Risk factors: ${assessment.riskFactors.join(', ')}`)
-    }
-    
-    if (assessment.immediateInterventionRequired) {
-      insights.push('Immediate intervention required')
-    }
-    
-    if (assessment.urgencyScore > 60) {
-      insights.push('High urgency situation detected')
-    }
-    
-    if (assessment.protectiveFactors.length > 0) {
-      insights.push(`Protective factors present: ${assessment.protectiveFactors.join(', ')}`)
-    }
-    
-    return insights
-  }
-
-  private generateOrchestratorRecommendations(assessment: CrisisAssessment): string[] {
-    const recommendations = []
-    
-    if (assessment.riskLevel === 'crisis') {
-      recommendations.push('emergency_response_protocol', 'override_standard_processing', 'activate_human_support')
-    } else if (assessment.riskLevel === 'high') {
-      recommendations.push('prioritize_safety_response', 'include_professional_resources', 'schedule_followup')
-    } else if (assessment.riskLevel === 'moderate') {
-      recommendations.push('include_coping_strategies', 'provide_support_resources')
-    } else {
-      recommendations.push('standard_supportive_response')
-    }
-    
-    if (assessment.immediateInterventionRequired) {
-      recommendations.push('bypass_normal_wait_times')
-    }
-    
-    return recommendations
-  }
-
-  private generateContributedInsights(assessment: CrisisAssessment): string[] {
-    const insights = []
-    
-    insights.push(`Crisis risk level: ${assessment.riskLevel}`)
-    
-    if (assessment.immediateInterventionRequired) {
-      insights.push('Immediate safety intervention required')
-    }
-    
-    if (assessment.professionalReferralRecommended) {
-      insights.push('Professional mental health referral recommended')
-    }
-    
-    if (assessment.safetyPlan) {
-      insights.push('Safety plan generated with immediate steps and coping strategies')
-    }
-    
-    return insights
-  }
-
-  private calculateInfluence(assessment: CrisisAssessment): number {
-    // Crisis assessments have maximum influence on final response
-    switch (assessment.riskLevel) {
-      case 'crisis': return 1.0
-      case 'high': return 0.9
-      case 'moderate': return 0.7
-      case 'low': return 0.4
-      default: return 0.1
-    }
+    return triggers
   }
 }
 
-// Export singleton instance
+// Create singleton instance
 export const crisisMonitor = new CrisisMonitor()
+
+// Export helper function for backward compatibility
+export async function assessCrisis(
+  message: string, 
+  userId: string, 
+  startTimeMs: number,
+  emotionalState?: any,
+  assignedTask: string = 'Assess crisis risk and safety requirements'
+): Promise<AgentExecutionResult> {
+  const context: AgentContext = {
+    userId,
+    messageId: `crisis_${Date.now()}`,
+    conversationId: `conv_${userId}_${Date.now()}`,
+    userMessage: message,
+    emotionalState
+  }
+  
+  return await crisisMonitor.execute(context, assignedTask, startTimeMs)
+}

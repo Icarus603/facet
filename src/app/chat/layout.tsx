@@ -6,11 +6,11 @@ import { createClient } from '@/lib/supabase/client'
 import { redirect } from 'next/navigation'
 import { useEffect, useState } from 'react'
 
-function DashboardContent({ children }: { children: React.ReactNode }) {
+function ChatContent({ children }: { children: React.ReactNode }) {
   const { sidebarOpen, isInitialized } = useSidebar()
   
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen" style={{ backgroundColor: '#FAF9F5' }}>
       <AppSidebar />
       <main 
         className={`min-h-screen overflow-auto ${sidebarOpen ? 'ml-80' : 'ml-16'} ${isInitialized ? 'transition-all duration-300 ease-in-out' : ''}`}
@@ -22,7 +22,7 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
   )
 }
 
-export default function DashboardLayout({
+export default function ChatLayout({
   children,
 }: {
   children: React.ReactNode
@@ -53,9 +53,9 @@ export default function DashboardLayout({
 
   return (
     <SidebarProvider>
-      <DashboardContent>
+      <ChatContent>
         {children}
-      </DashboardContent>
+      </ChatContent>
     </SidebarProvider>
   )
 }

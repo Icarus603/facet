@@ -91,6 +91,34 @@ body {
   font-feature-settings: "rlig" 1, "calt" 1;
 }
 
+/* Set FACET background for authenticated pages */
+html, body {
+  background-color: #FAF9F5 !important;
+}
+
+/* Ensure all scrollable areas have FACET background */
+html {
+  background-color: #FAF9F5 !important;
+}
+
+/* Override any default backgrounds */
+#__next, [data-nextjs-scroll-focus-boundary] {
+  background-color: #FAF9F5 !important;
+}
+
+/* Custom scrollbar styling */
+* {
+  scrollbar-color: #CBD5E1 #FAF9F5;
+}
+
+::-webkit-scrollbar-track {
+  background: #FAF9F5;
+}
+
+::-webkit-scrollbar-corner {
+  background: #FAF9F5;
+}
+
 /* FACET Brand Utility Classes */
 .bg-facet-blue { background-color: var(--facet-blue-primary); }
 .bg-facet-wine { background-color: var(--facet-wine-primary); }
@@ -221,6 +249,7 @@ body {
 .meslo-font {
   font-family: "MesloLGS NF", "Menlo", "Monaco", "Courier New", monospace;
   font-weight: 500;
+  font-style: italic;
   letter-spacing: -0.02em;
 }
 

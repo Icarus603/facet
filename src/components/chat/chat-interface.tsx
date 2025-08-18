@@ -4,36 +4,101 @@ import React, { useState, useEffect, useRef } from 'react'
 import { MessageList } from './message-list'
 import { ChatInput } from './chat-input'
 import { TypingIndicator } from './typing-indicator'
-import { AgentOrchestrator } from '@/lib/agents/orchestrator'
 import { Message, AgentType } from '@/lib/types/agent'
+import { ChatRequest, ChatResponse, AgentOrchestrationData } from '@/lib/types/api-contract'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
-import { Shield, Brain, Heart, Target } from 'lucide-react'
+import { useSidebar } from '@/lib/hooks/useSidebar'
+import { useWebSocketConnection, useAgentStatusUpdates } from '@/lib/websocket/orchestration-hooks'
 
 interface ChatInterfaceProps {
-  userId: string
-  sessionId?: string
+  conversationId?: string
+  onFirstMessage?: (message: string) => void
+  isNewSession?: boolean
   className?: string
+  initialMessage?: string
 }
 
 export function ChatInterface({ 
-  userId, 
-  sessionId, 
-  className
+  conversationId, 
+  onFirstMessage,
+  isNewSession = false,
+  className,
+  initialMessage
 }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [isTyping, setIsTyping] = useState(false)
   const [currentAgent, setCurrentAgent] = useState<AgentType>('therapeutic_advisor')
-  const [loading, setLoading] = useState(true)
+  const [userId, setUserId] = useState<string>('')
+  const [hasStartedConversation, setHasStartedConversation] = useState(false)
+  
+  // Agent transparency state
+  const [agentStatuses, setAgentStatuses] = useState<Array<{
+    agentName: keyof typeof import('@/lib/types/api-contract').AGENT_CONFIG
+    status: 'pending' | 'running' | 'completed' | 'error'
+    progress?: number
+    executionTimeMs?: number
+    confidence?: number
+  }>>([])
+  const [totalProcessingTime, setTotalProcessingTime] = useState(0)
+  const [transparencyLevel] = useState<'minimal' | 'standard' | 'detailed'>('standard')
   
   const chatContainerRef = useRef<HTMLDivElement>(null)
-  const orchestrator = useRef(new AgentOrchestrator())
   const supabase = createClient()
+  const { sidebarOpen } = useSidebar()
 
-  // Load conversation history on mount
+  // WebSocket connection for real-time agent updates
+  const { agentStatuses: realAgentStatuses, orchestrationData } = useAgentStatusUpdates(conversationId)
+
+  // Update local state when WebSocket receives agent status updates
   useEffect(() => {
-    loadConversationHistory()
-  }, [sessionId])
+    if (realAgentStatuses.length > 0) {
+      setAgentStatuses(realAgentStatuses.map(status => ({
+        agentName: status.agentName as keyof typeof import('@/lib/types/api-contract').AGENT_CONFIG,
+        status: status.status === 'queued' ? 'pending' : status.status === 'failed' ? 'error' : status.status,
+        progress: status.progress,
+        executionTimeMs: status.executionTimeMs,
+        confidence: status.confidence
+      })))
+    }
+  }, [realAgentStatuses])
+
+  // Update orchestration data when WebSocket receives updates
+  useEffect(() => {
+    if (orchestrationData.complete) {
+      setTotalProcessingTime(orchestrationData.complete.totalTimeMs)
+      setIsTyping(false)
+    }
+  }, [orchestrationData])
+
+  // Get user and load conversation history on mount
+  useEffect(() => {
+    async function initializeChat() {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        setUserId(user.id)
+        await loadConversationHistory(user.id)
+        
+        // Handle initial message if provided (API call already started)
+        if (initialMessage && initialMessage.trim()) {
+          // Add the user message to display
+          const userMessage: Message = {
+            id: `user_${Date.now()}`,
+            userId: user.id,
+            content: initialMessage.trim(),
+            timestamp: new Date(),
+            type: 'user'
+          }
+          setMessages([userMessage])
+          setIsTyping(true)
+          
+          // Wait for the API response (already called when user pressed Enter)
+          waitForApiResponse(userMessage.id)
+        }
+      }
+    }
+    initializeChat()
+  }, [conversationId, initialMessage])
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -42,20 +107,21 @@ export function ChatInterface({
     }
   }, [messages, isTyping])
 
-  const loadConversationHistory = async () => {
-    if (!sessionId) return
+  const loadConversationHistory = async (currentUserId: string) => {
+    if (!conversationId) return
 
+    // Don't set loading - show interface immediately
     try {
       const { data: history } = await supabase
         .from('conversation_messages')
         .select('*')
-        .eq('session_id', sessionId)
+        .eq('session_id', conversationId)
         .order('timestamp', { ascending: true })
 
       if (history) {
         const formattedMessages: Message[] = history.map(msg => ({
           id: msg.id,
-          userId: userId,
+          userId: currentUserId,
           content: msg.content,
           timestamp: new Date(msg.timestamp),
           type: msg.message_type as 'user' | 'agent',
@@ -72,33 +138,29 @@ export function ChatInterface({
         setMessages(formattedMessages)
       }
 
-      // Add welcome message if this is a new session
-      if (!history || history.length === 0) {
-        const welcomeMessage: Message = {
-          id: 'welcome',
-          userId: userId,
-          content: `Hello! I'm here to provide you with personalized mental health support. I'm equipped with specialized knowledge in therapy, crisis intervention, and emotional wellness.
-
-You can talk to me about anything that's on your mind - whether you're dealing with stress, anxiety, depression, relationship issues, or just need someone to listen. I'm here 24/7 to support you.
-
-How are you feeling today?`,
-          timestamp: new Date(),
-          type: 'agent',
-          agentType: 'therapeutic_advisor'
-        }
-        setMessages([welcomeMessage])
-      }
+      // No automatic welcome message - let conversations start clean
     } catch (error) {
       console.error('Error loading conversation history:', error)
-    } finally {
-      setLoading(false)
     }
+    // Remove setLoading(false) - no loading state needed
   }
 
   const handleSendMessage = async (content: string) => {
     if (!content.trim()) return
 
-    // Add user message immediately
+    // Handle first message callback for new sessions
+    if (isNewSession && !hasStartedConversation) {
+      setHasStartedConversation(true)
+      if (onFirstMessage) {
+        onFirstMessage(content)
+      }
+    }
+
+    // Reset agent transparency state
+    setAgentStatuses([])
+    setTotalProcessingTime(0)
+
+    // Add user message immediately - no waiting
     const userMessage: Message = {
       id: `user_${Date.now()}`,
       userId,
@@ -110,30 +172,155 @@ How are you feeling today?`,
     setMessages(prev => [...prev, userMessage])
     setIsTyping(true)
 
+    // Start API call in background - real agent events will come via WebSocket
+    processMessageInBackground(content, userMessage.id)
+  }
+
+  const waitForApiResponse = async (userMessageId: string) => {
+    // Check sessionStorage for API response that's being processed
+    const checkForResponse = () => {
+      const response = sessionStorage.getItem('apiResponse')
+      const error = sessionStorage.getItem('apiError')
+      
+      if (response) {
+        // API succeeded
+        sessionStorage.removeItem('apiResponse')
+        const chatResponse = JSON.parse(response)
+        
+        // Add agent message with orchestration data
+        const agentMessage: Message = {
+          id: chatResponse.messageId,
+          userId,
+          content: chatResponse.content,
+          timestamp: new Date(),
+          type: 'agent',
+          agentType: currentAgent,
+          orchestration: chatResponse.orchestration,
+          metadata: {
+            processingTime: chatResponse.metadata.processingTimeMs,
+            interventions: chatResponse.metadata.recommendedFollowUp || [],
+            recommendations: chatResponse.metadata.recommendedFollowUp,
+            confidence: chatResponse.metadata.responseConfidence,
+            emotionalState: chatResponse.metadata.emotionalState,
+            riskAssessment: chatResponse.metadata.riskAssessment,
+            emergencyResponse: chatResponse.metadata.emergencyResponse
+          }
+        }
+        setMessages(prev => [...prev, agentMessage])
+        setIsTyping(false)
+        return true
+      }
+      
+      if (error) {
+        // API failed
+        sessionStorage.removeItem('apiError')
+        const errorMessage: Message = {
+          id: `error_${userMessageId}_${Date.now()}`,
+          userId,
+          content: "I'm sorry, I'm experiencing a technical issue. Please try again in a moment.",
+          timestamp: new Date(),
+          type: 'agent',
+          agentType: 'therapeutic_advisor'
+        }
+        setMessages(prev => [...prev, errorMessage])
+        setIsTyping(false)
+        return true
+      }
+      
+      return false
+    }
+    
+    // Poll for response
+    const pollInterval = setInterval(() => {
+      if (checkForResponse()) {
+        clearInterval(pollInterval)
+      }
+    }, 100)
+    
+  }
+
+  const processMessageInBackground = async (content: string, userMessageId: string) => {
+    const messageStartTime = Date.now()
     try {
-      // Process message through orchestrator
-      const response = await orchestrator.current.processMessage(
-        content,
-        userId,
-        sessionId
-      )
+      // Create chat request
+      const chatRequest: ChatRequest = {
+        message: content,
+        conversationId,
+        userPreferences: {
+          transparencyLevel: 'standard',
+          agentVisibility: true,
+          processingSpeed: 'thorough',
+          communicationStyle: 'professional_warm'
+        }
+      }
+
+      // Send to API endpoint
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(chatRequest)
+      })
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`)
+      }
+
+      const responseData = await response.json()
+
+      const chatResponse: ChatResponse = responseData
 
       // Update current agent based on response
-      setCurrentAgent(response.agentType)
+      if (chatResponse.orchestration?.agentResults) {
+        const lastAgent = chatResponse.orchestration.agentResults[chatResponse.orchestration.agentResults.length - 1]
+        setCurrentAgent(lastAgent.agentName as AgentType)
+      }
 
-      // Add agent response
+      // Update agent statuses based on orchestration results
+      if (chatResponse.orchestration) {
+        setTotalProcessingTime(chatResponse.orchestration.timing.totalTimeMs)
+        
+        // Update final agent statuses
+        const finalStatuses = chatResponse.orchestration.agentResults.map(result => ({
+          agentName: result.agentName as keyof typeof import('@/lib/types/api-contract').AGENT_CONFIG,
+          status: result.success ? 'completed' as const : 'error' as const,
+          executionTimeMs: result.executionTimeMs,
+          confidence: result.confidence
+        }))
+        setAgentStatuses(finalStatuses)
+      } else {
+        // Handle fast path responses (orchestration: null)
+        console.log('🚀 Fast path response - marking emotion analyzer as completed')
+        setTotalProcessingTime(chatResponse.metadata.processingTimeMs)
+        
+        // For fast path, only emotion analyzer runs
+        const fastPathStatus = [{
+          agentName: 'emotion_analyzer' as keyof typeof import('@/lib/types/api-contract').AGENT_CONFIG,
+          status: 'completed' as const,
+          executionTimeMs: chatResponse.metadata.processingTimeMs,
+          confidence: chatResponse.metadata.emotionalState?.confidence || 0.7
+        }]
+        setAgentStatuses(fastPathStatus)
+      }
+
+      // Add agent response with orchestration data
       const agentMessage: Message = {
-        id: `agent_${Date.now()}`,
+        id: chatResponse.messageId,
         userId,
-        content: response.content,
+        content: chatResponse.content,
         timestamp: new Date(),
         type: 'agent',
-        agentType: response.agentType,
+        agentType: currentAgent,
+        orchestration: chatResponse.orchestration,
         metadata: {
-          processingTime: response.processingTime,
-          interventions: response.metadata?.interventions || [],
-          recommendations: response.metadata?.recommendations,
-          confidence: response.confidence
+          processingTime: chatResponse.metadata.processingTimeMs,
+          interventions: chatResponse.metadata.recommendedFollowUp || [],
+          recommendations: chatResponse.metadata.recommendedFollowUp,
+          confidence: chatResponse.metadata.responseConfidence,
+          emotionalState: chatResponse.metadata.emotionalState,
+          riskAssessment: chatResponse.metadata.riskAssessment,
+          emergencyResponse: chatResponse.metadata.emergencyResponse
         }
       }
 
@@ -144,7 +331,7 @@ How are you feeling today?`,
       
       // Add error message
       const errorMessage: Message = {
-        id: `error_${Date.now()}`,
+        id: `error_${userMessageId}_${Date.now()}`,
         userId,
         content: "I'm sorry, I'm experiencing a technical issue. Please try again in a moment. If you're in crisis, please contact 988 immediately.",
         timestamp: new Date(),
@@ -158,91 +345,35 @@ How are you feeling today?`,
     }
   }
 
-  const getAgentInfo = (agentType: AgentType) => {
-    switch (agentType) {
-      case 'crisis_assessor':
-        return {
-          name: 'Crisis Support',
-          icon: Shield,
-          color: 'text-red-600',
-          description: 'Immediate safety and crisis intervention'
-        }
-      case 'emotion_analyzer':
-        return {
-          name: 'Emotional Support',
-          icon: Heart,
-          color: 'text-pink-600',
-          description: 'Understanding and processing emotions'
-        }
-      case 'therapeutic_advisor':
-        return {
-          name: 'Therapy Guide',
-          icon: Brain,
-          color: 'text-blue-600',
-          description: 'Therapeutic interventions and guidance'
-        }
-      case 'smart_router':
-        return {
-          name: 'Coordinator',
-          icon: Target,
-          color: 'text-purple-600',
-          description: 'Coordinating your care'
-        }
-      default:
-        return {
-          name: 'Therapy Guide',
-          icon: Brain,
-          color: 'text-blue-600',
-          description: 'Therapeutic support'
-        }
-    }
-  }
 
-  const agentInfo = getAgentInfo(currentAgent)
 
-  if (loading) {
+  // Remove loading screen completely - show interface immediately
+
+  if (isNewSession && !hasStartedConversation) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading your conversation...</p>
-        </div>
+      <div className={cn("", className)}>
+        <ChatInput 
+          onSendMessage={handleSendMessage}
+          disabled={isTyping}
+          placeholder="How can I help you today?"
+        />
       </div>
     )
   }
 
   return (
-    <div className={cn("flex flex-col h-full bg-gray-50", className)}>
-      {/* Chat Header */}
-      <div className="flex items-center justify-between px-6 py-4 bg-white border-b border-gray-200">
-        <div className="flex items-center space-x-3">
-          <div className={cn("p-2 rounded-lg bg-gray-100", agentInfo.color)}>
-            <agentInfo.icon className="h-5 w-5" />
-          </div>
-          <div>
-            <h1 className="text-lg font-medium text-gray-900">
-              {agentInfo.name}
-            </h1>
-            <p className="text-sm text-gray-500">
-              {agentInfo.description}
-            </p>
-          </div>
-        </div>
-        
-        <div className="flex items-center space-x-2">
-          <div className="w-3 h-3 rounded-full bg-green-400"></div>
-          <span className="text-sm text-gray-500">Online</span>
-        </div>
-      </div>
+    <div className={cn("min-h-screen flex flex-col", className)} style={{backgroundColor: '#FAF9F5'}}>
 
       {/* Messages Container */}
       <div 
         ref={chatContainerRef}
-        className="flex-1 overflow-y-auto px-6 py-4 space-y-4"
+        className="flex-1 overflow-y-auto px-4 py-8 space-y-6 max-w-4xl mx-auto w-full"
+        style={{ paddingBottom: '300px' }} // Space for fixed input
       >
         <MessageList 
           messages={messages}
           currentUserId={userId}
+          transparencyLevel={transparencyLevel}
         />
         
         {isTyping && (
@@ -252,13 +383,17 @@ How are you feeling today?`,
         )}
       </div>
 
-      {/* Chat Input */}
-      <div className="border-t border-gray-200 bg-white px-6 py-4">
-        <ChatInput 
-          onSendMessage={handleSendMessage}
-          disabled={isTyping}
-          placeholder="Share what's on your mind..."
-        />
+      {/* Fixed Chat Input - Always centered in main content area */}
+      <div 
+        className={`fixed bottom-0 right-0 px-4 pb-8 ${sidebarOpen ? 'left-80' : 'left-16'} transition-all duration-300 ease-in-out pointer-events-none`}
+      >
+        <div className="w-full max-w-3xl mx-auto pointer-events-auto">
+          <ChatInput 
+            onSendMessage={handleSendMessage}
+            disabled={isTyping}
+            placeholder="How can I support you today?"
+          />
+        </div>
       </div>
     </div>
   )

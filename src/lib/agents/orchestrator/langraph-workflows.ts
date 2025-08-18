@@ -186,6 +186,9 @@ export class FACETWorkflows {
     this.workflow.addEdge("progressTracker", "memoryManager")
     this.workflow.addEdge("therapyAdvisor", "responseSynthesizer")
     this.workflow.addEdge("responseSynthesizer", END)
+    
+    // Compile the workflow to enable invoke
+    this.workflow = this.workflow.compile()
   }
 
   /**

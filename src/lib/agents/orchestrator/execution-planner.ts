@@ -35,7 +35,7 @@ export class ExecutionPlanner {
         strategy: "Crisis priority - immediate safety assessment",
         executionPattern: 'crisis_priority',
         agentsToInvoke: ['crisis_monitor', 'therapy_advisor', 'memory_manager'],
-        estimatedTimeMs: 1100,
+        estimatedTimeMs: 6000, // Increased for proxy requests (was 1100)
         description: "Crisis Monitor → [Therapy Advisor || Memory Manager] → Professional Alert",
         parallelGroups: [['therapy_advisor', 'memory_manager']],
         dependencies: {
@@ -55,7 +55,7 @@ export class ExecutionPlanner {
         strategy: "Progress focus - historical analysis needed",
         executionPattern: 'parallel',
         agentsToInvoke: ['progress_tracker', 'memory_manager', 'therapy_advisor'],
-        estimatedTimeMs: 2500,
+        estimatedTimeMs: 10000, // Increased for proxy requests (was 2500)
         description: "[Progress Tracker || Memory Manager] → Therapy Advisor",
         parallelGroups: [['progress_tracker', 'memory_manager']],
         dependencies: {
@@ -70,7 +70,7 @@ export class ExecutionPlanner {
         strategy: "High emotion + crisis keywords - parallel analysis",
         executionPattern: 'parallel',
         agentsToInvoke: ['emotion_analyzer', 'crisis_monitor', 'memory_manager', 'therapy_advisor'],
-        estimatedTimeMs: 2800,
+        estimatedTimeMs: 12000, // Increased for proxy requests (was 2800)
         description: "[Emotion Analyzer || Crisis Monitor || Memory Manager] → Therapy Advisor",
         parallelGroups: [['emotion_analyzer', 'crisis_monitor', 'memory_manager']],
         dependencies: {
@@ -84,7 +84,7 @@ export class ExecutionPlanner {
       strategy: "Simple emotional state - light analysis",
       executionPattern: 'serial',
       agentsToInvoke: ['emotion_analyzer'],
-      estimatedTimeMs: 1200,
+      estimatedTimeMs: 10000, // Further increased for proxy latency (was 5000)
       description: "Emotion Analyzer → Response",
       dependencies: {}
     }
@@ -186,16 +186,16 @@ export class ExecutionPlanner {
     const baseTimeout = plan.estimatedTimeMs
 
     if (plan.executionPattern === 'crisis_priority') {
-      return 2000 // Always 2s max for crisis
+      return 10000 // Increased for proxy requests (was 2000)
     }
 
     const speed = userPreferences?.processingSpeed || 'thorough'
     
     switch (speed) {
       case 'fast':
-        return Math.min(baseTimeout * 0.7, 1500)
+        return Math.min(baseTimeout * 0.7, 8000) // Increased for proxy (was 1500)
       case 'thorough':
-        return Math.min(baseTimeout * 1.3, 8000)
+        return Math.min(baseTimeout * 1.3, 20000) // Increased for proxy (was 8000)
       default:
         return baseTimeout
     }

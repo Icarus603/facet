@@ -22,9 +22,9 @@ export default async function HomePage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  // Redirect authenticated users to dashboard
+  // Redirect authenticated users to chat
   if (user) {
-    redirect('/dashboard')
+    redirect('/chat/new')
   }
 
   return (

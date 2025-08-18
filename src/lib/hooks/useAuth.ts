@@ -26,7 +26,7 @@ export function useAuth() {
         setLoading(false)
         
         if (event === 'SIGNED_IN') {
-          router.push('/dashboard')
+          router.push('/chat/new')
         } else if (event === 'SIGNED_OUT') {
           router.push('/')
         }

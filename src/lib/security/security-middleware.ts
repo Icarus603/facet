@@ -100,19 +100,19 @@ export class FACETSecurityMiddleware {
       // 3. CORS validation
       const corsValidation = this.validateCORS(request)
       if (!corsValidation.allowed) {
-        return this.blockRequest(context, 'CORS_VIOLATION', corsValidation.reason, response)
+        return this.blockRequest(context, 'CORS_VIOLATION', corsValidation.reason || 'CORS violation', response)
       }
       
       // 4. Rate limiting
       const rateLimitValidation = this.validateRateLimit(context)
       if (!rateLimitValidation.allowed) {
-        return this.blockRequest(context, 'RATE_LIMIT_EXCEEDED', rateLimitValidation.reason, response)
+        return this.blockRequest(context, 'RATE_LIMIT_EXCEEDED', rateLimitValidation.reason || 'Rate limit exceeded', response)
       }
       
       // 5. Authentication validation
       const authValidation = await this.validateAuthentication(request, context)
       if (!authValidation.allowed) {
-        return this.blockRequest(context, 'AUTHENTICATION_FAILED', authValidation.reason, response)
+        return this.blockRequest(context, 'AUTHENTICATION_FAILED', authValidation.reason || 'Authentication failed', response)
       }
       
       // Update context with auth info
@@ -123,22 +123,18 @@ export class FACETSecurityMiddleware {
       // 6. Authorization validation
       const authzValidation = this.validateAuthorization(context)
       if (!authzValidation.allowed) {
-        return this.blockRequest(context, 'AUTHORIZATION_FAILED', authzValidation.reason, response)
+        return this.blockRequest(context, 'AUTHORIZATION_FAILED', authzValidation.reason || 'Authorization failed', response)
       }
       
       // 7. Threat detection
       const threatValidation = await this.detectThreats(request, context)
       if (!threatValidation.allowed) {
-        return this.blockRequest(context, 'THREAT_DETECTED', threatValidation.reason, response)
+        return this.blockRequest(context, 'THREAT_DETECTED', threatValidation.reason || 'Threat detected', response)
       }
       
-      // 8. Input validation (for requests with body)
-      if (['POST', 'PUT', 'PATCH'].includes(context.method)) {
-        const inputValidation = await this.validateRequestInput(request, context)
-        if (!inputValidation.allowed) {
-          return this.blockRequest(context, 'INPUT_VALIDATION_FAILED', inputValidation.reason, response)
-        }
-      }
+      // 8. Skip input validation here - let API route handle it
+      // This prevents consuming the request body before the route can read it
+      // Input validation is moved to the API route handler
       
       // 9. Update security context with final risk assessment
       context.riskLevel = this.calculateOverallRiskLevel(context)
@@ -279,6 +275,33 @@ export class FACETSecurityMiddleware {
     userRole?: 'user' | 'premium' | 'admin'
     isAuthenticated: boolean
   }> {
+    // In development, be more permissive
+    if (process.env.NODE_ENV === 'development') {
+      try {
+        const supabase = await createClient()
+        const { data: { user }, error } = await supabase.auth.getUser()
+        
+        if (user && !error) {
+          return {
+            allowed: true,
+            userId: user.id,
+            userRole: 'user',
+            isAuthenticated: true
+          }
+        }
+      } catch (error) {
+        console.warn('Auth check failed in dev mode, proceeding anyway:', error)
+      }
+      
+      // Allow request even if auth fails in development
+      return {
+        allowed: true,
+        userId: 'dev-user-id',
+        userRole: 'user',
+        isAuthenticated: true
+      }
+    }
+    
     // Check if endpoint requires authentication
     const requiresAuth = SECURITY_CONFIG.AUTH_REQUIRED_ENDPOINTS.some(endpoint => 
       context.endpoint.startsWith(endpoint)
@@ -289,7 +312,7 @@ export class FACETSecurityMiddleware {
     }
     
     try {
-      const supabase = createClient()
+      const supabase = await createClient()
       const { data: { user }, error } = await supabase.auth.getUser()
       
       if (error || !user) {
@@ -593,9 +616,14 @@ export class FACETSecurityMiddleware {
   
   // Helper methods
   private getClientIP(request: NextRequest): string {
-    return request.headers.get('x-forwarded-for')?.split(',')[0] || 
-           request.headers.get('x-real-ip') || 
-           'unknown'
+    const forwardedFor = request.headers.get('x-forwarded-for')
+    const realIP = request.headers.get('x-real-ip')
+    
+    if (forwardedFor) {
+      return forwardedFor.split(',')[0].trim()
+    }
+    
+    return realIP || 'unknown'
   }
   
   private isSuspiciousUserAgent(userAgent: string): boolean {

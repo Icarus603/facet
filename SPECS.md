@@ -13,28 +13,8 @@ FACET is a sophisticated mental health platform powered by a dynamic multi-agent
 ### **Core Innovation**
 Unlike traditional AI chatbots with fixed responses, FACET employs an **Intelligent Orchestrator** that dynamically coordinates specialized AI agents based on user context, providing transparent, collaborative, and highly personalized therapeutic support.
 
----
 
-## 🏗️ **CURRENT ARCHITECTURE STATE**
-
-### ✅ **Implemented Foundation**
-- **Next.js 15** full-stack application with App Router
-- **Supabase** authentication and PostgreSQL database with comprehensive mental health schema
-- **Pinecone** vector database with sophisticated memory management
-- **OpenAI GPT-5** integration with basic multi-agent framework
-- **FACET Design System** with established visual identity and component library
-- **Basic Chat Interface** with message handling and user authentication
-
-### ❌ **Current Limitations**
-- **Fixed Workflow Architecture**: Hard-coded light/standard/crisis/deep modes
-- **No Dynamic Orchestration**: Agents cannot adapt workflow based on real-time context
-- **Limited Transparency**: Users cannot see agent reasoning and collaboration processes
-- **Complex API Coordination**: Fixed workflows create tight coupling between frontend and backend
-- **Scalability Issues**: Adding new agents requires system-wide changes
-
----
-
-## 🚀 **NEW ARCHITECTURE: LANGCHAIN-POWERED DYNAMIC ORCHESTRATION**
+## 🚀 **ARCHITECTURE: LANGCHAIN-POWERED DYNAMIC ORCHESTRATION**
 
 ### **Paradigm Shift**
 ```

@@ -8,15 +8,13 @@ import { useAuth } from '@/lib/hooks/useAuth'
 import { useSidebar } from '@/lib/hooks/useSidebar'
 import { 
   MessageCircle,
-  BarChart3,
-  Target,
   Settings,
-  Home,
   LogOut,
   User,
   ChevronUp,
   HelpCircle,
-  Shield
+  Shield,
+  Plus
 } from 'lucide-react'
 
 export function AppSidebar() {
@@ -42,6 +40,7 @@ export function AppSidebar() {
       document.removeEventListener('mousedown', handleClickOutside)
     }
   }, [userMenuOpen])
+
 
   const getButtonColor = (path: string) => {
     return pathname === path ? 'var(--facet-wine-primary)' : 'var(--facet-blue-primary)'
@@ -75,6 +74,25 @@ export function AppSidebar() {
         {/* Navigation */}
         <div className="pt-2 space-y-3" style={{ paddingLeft: '8px', paddingRight: '8px' }}>
           <div className="relative h-10">
+            <Link href="/chat/new">
+              <button 
+                className={`absolute top-0 h-10 text-white rounded-lg hover:opacity-90 ${isInitialized ? 'transition-all duration-300' : ''}`}
+                style={{ 
+                  backgroundColor: getButtonColor('/chat/new'),
+                  left: '4px',
+                  width: sidebarOpen ? 'calc(100% - 8px)' : '40px'
+                }}
+                title="New Chat"
+              >
+              </button>
+            </Link>
+            <div className="absolute top-0 left-1 w-10 h-10 flex items-center justify-center pointer-events-none">
+              <Plus className="w-5 h-5 text-white" />
+            </div>
+            <span className={`absolute top-2.5 left-14 text-sm font-medium text-white whitespace-nowrap ${isInitialized ? 'transition-opacity duration-300' : ''} ${sidebarOpen ? 'opacity-100' : 'opacity-0'}`}>New Chat</span>
+          </div>
+
+          <div className="relative h-10">
             <Link href="/chat">
               <button 
                 className={`absolute top-0 h-10 text-white rounded-lg hover:opacity-90 ${isInitialized ? 'transition-all duration-300' : ''}`}
@@ -83,71 +101,14 @@ export function AppSidebar() {
                   left: '4px',
                   width: sidebarOpen ? 'calc(100% - 8px)' : '40px'
                 }}
-                title="Chat Therapy"
+                title="Chats"
               >
               </button>
             </Link>
             <div className="absolute top-0 left-1 w-10 h-10 flex items-center justify-center pointer-events-none">
               <MessageCircle className="w-5 h-5 text-white" />
             </div>
-            <span className={`absolute top-2.5 left-14 text-sm font-medium text-white whitespace-nowrap ${isInitialized ? 'transition-opacity duration-300' : ''} ${sidebarOpen ? 'opacity-100' : 'opacity-0'}`}>Chat Therapy</span>
-          </div>
-
-          <div className="relative h-10">
-            <Link href="/dashboard">
-              <button 
-                className={`absolute top-0 h-10 text-white rounded-lg hover:opacity-90 ${isInitialized ? 'transition-all duration-300' : ''}`}
-                style={{ 
-                  backgroundColor: getButtonColor('/dashboard'),
-                  left: '4px',
-                  width: sidebarOpen ? 'calc(100% - 8px)' : '40px'
-                }}
-                title="Dashboard"
-              >
-              </button>
-            </Link>
-            <div className="absolute top-0 left-1 w-10 h-10 flex items-center justify-center pointer-events-none">
-              <Home className="w-5 h-5 text-white" />
-            </div>
-            <span className={`absolute top-2.5 left-14 text-sm font-medium text-white whitespace-nowrap ${isInitialized ? 'transition-opacity duration-300' : ''} ${sidebarOpen ? 'opacity-100' : 'opacity-0'}`}>Dashboard</span>
-          </div>
-
-          <div className="relative h-10">
-            <Link href="/progress">
-              <button 
-                className={`absolute top-0 h-10 text-white rounded-lg hover:opacity-90 ${isInitialized ? 'transition-all duration-300' : ''}`}
-                style={{ 
-                  backgroundColor: getButtonColor('/progress'),
-                  left: '4px',
-                  width: sidebarOpen ? 'calc(100% - 8px)' : '40px'
-                }}
-                title="Progress"
-              >
-              </button>
-            </Link>
-            <div className="absolute top-0 left-1 w-10 h-10 flex items-center justify-center pointer-events-none">
-              <BarChart3 className="w-5 h-5 text-white" />
-            </div>
-            <span className={`absolute top-2.5 left-14 text-sm font-medium text-white whitespace-nowrap ${isInitialized ? 'transition-opacity duration-300' : ''} ${sidebarOpen ? 'opacity-100' : 'opacity-0'}`}>Progress</span>
-          </div>
-
-          <div className="relative h-10">
-            <Link href="/goals">
-              <button 
-                className={`absolute top-0 h-10 text-white rounded-lg hover:opacity-90 ${isInitialized ? 'transition-all duration-300' : ''}`}
-                style={{ 
-                  backgroundColor: getButtonColor('/goals'),
-                  left: '4px',
-                  width: sidebarOpen ? 'calc(100% - 8px)' : '40px'
-                }}
-                title="Goals"
-              >
-              </button>
-            </Link>
-            <div className="absolute top-0 left-1 w-10 h-10 flex items-center justify-center pointer-events-none">
-              <Target className="w-5 h-5 text-white" />
-            </div>
-            <span className={`absolute top-2.5 left-14 text-sm font-medium text-white whitespace-nowrap ${isInitialized ? 'transition-opacity duration-300' : ''} ${sidebarOpen ? 'opacity-100' : 'opacity-0'}`}>Goals</span>
+            <span className={`absolute top-2.5 left-14 text-sm font-medium text-white whitespace-nowrap ${isInitialized ? 'transition-opacity duration-300' : ''} ${sidebarOpen ? 'opacity-100' : 'opacity-0'}`}>Chats</span>
           </div>
 
         </div>

@@ -53,9 +53,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" style={{ backgroundColor: '#FAF9F5' }}>
       <body
         className={`${geistSans.variable} ${geistMono.variable} ${inter.variable} ${crimsonText.variable} ${playfairDisplay.variable} ${libreBaskerville.variable} antialiased`}
+        style={{ backgroundColor: '#FAF9F5' }}
       >
         {children}
       </body>

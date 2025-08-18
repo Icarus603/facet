@@ -59,6 +59,7 @@ export interface Message {
   timestamp: Date;
   type: 'user' | 'agent';
   agentType?: AgentType;
+  orchestration?: import('./api-contract').AgentOrchestrationData | null;
   metadata?: {
     emotionAnalysis?: EmotionAnalysis;
     crisisAssessment?: CrisisAssessment;
@@ -67,6 +68,9 @@ export interface Message {
     interventions?: string[];
     recommendations?: string[];
     confidence?: number;
+    emotionalState?: import('./api-contract').ChatResponse['metadata']['emotionalState'];
+    riskAssessment?: import('./api-contract').ChatResponse['metadata']['riskAssessment'];
+    emergencyResponse?: import('./api-contract').ChatResponse['metadata']['emergencyResponse'];
   };
 }
 
