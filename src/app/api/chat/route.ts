@@ -10,7 +10,7 @@ import { z } from 'zod'
 import { v4 as uuidv4 } from 'uuid'
 
 import { ExecutionPlanner } from '@/lib/agents/orchestrator/execution-planner'
-import { simplifiedLangGraphOrchestrator } from '@/lib/agents/orchestrator/simplified-langgraph-orchestrator'
+import { FACETOrchestrator } from '@/lib/agents/orchestrator/langchain-orchestrator'
 import { ReasoningLogger } from '@/lib/agents/orchestrator/reasoning-logger'
 import { WebSocketBroadcaster } from '@/app/api/ws/route'
 import { securityMiddleware } from '@/lib/security/security-middleware'
@@ -42,6 +42,7 @@ const ChatRequestSchema = z.object({
 
 // Initialize orchestration components
 const executionPlanner = new ExecutionPlanner()
+const facetOrchestrator = new FACETOrchestrator()
 
 export async function POST(request: NextRequest) {
   const startTime = Date.now()
@@ -208,7 +209,7 @@ export async function POST(request: NextRequest) {
     // 4. Execute orchestrator - let therapeutic responses complete naturally
     let orchestratorResponse: ChatResponse
     try {
-      orchestratorResponse = await simplifiedLangGraphOrchestrator.processMessage(chatRequest, userId)
+      orchestratorResponse = await facetOrchestrator.processMessage(chatRequest, userId)
     } catch (error) {
       throw error
     }

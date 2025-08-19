@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { MessageList } from './message-list'
 import { ChatInput } from './chat-input'
 import { TypingIndicator } from './typing-indicator'
+import { AIWorkflowDisplay } from './ai-workflow-display'
 import { Message, AgentType } from '@/lib/types/agent'
 import { ChatRequest, ChatResponse, AgentOrchestrationData } from '@/lib/types/api-contract'
 import { createClient } from '@/lib/supabase/client'
@@ -279,6 +280,8 @@ export function ChatInterface({
 
       // Update agent statuses based on orchestration results
       if (chatResponse.orchestration) {
+        console.log('🔍 Frontend orchestration data:', chatResponse.orchestration)
+        console.log('🔍 Agent results:', chatResponse.orchestration.agentResults)
         setTotalProcessingTime(chatResponse.orchestration.timing.totalTimeMs)
         
         // Update final agent statuses
@@ -288,6 +291,7 @@ export function ChatInterface({
           executionTimeMs: result.executionTimeMs,
           confidence: result.confidence
         }))
+        console.log('🔍 Final agent statuses:', finalStatuses)
         setAgentStatuses(finalStatuses)
       } else {
         // Handle fast path responses (orchestration: null)
@@ -376,9 +380,12 @@ export function ChatInterface({
           transparencyLevel={transparencyLevel}
         />
         
-        {isTyping && (
-          <TypingIndicator 
-            agentType={currentAgent}
+        {(isTyping || agentStatuses.length > 0 || totalProcessingTime > 0) && (
+          <AIWorkflowDisplay 
+            isProcessing={isTyping}
+            agentStatuses={agentStatuses}
+            totalProcessingTime={totalProcessingTime}
+            orchestrationData={orchestrationData}
           />
         )}
       </div>
@@ -387,11 +394,16 @@ export function ChatInterface({
       <div 
         className={`fixed bottom-0 right-0 px-4 pb-8 ${sidebarOpen ? 'left-80' : 'left-16'} transition-all duration-300 ease-in-out pointer-events-none`}
       >
-        <div className="w-full max-w-3xl mx-auto pointer-events-auto">
+        <div className="w-full max-w-3xl mx-auto pointer-events-auto relative">
           <ChatInput 
             onSendMessage={handleSendMessage}
             disabled={isTyping}
             placeholder="How can I support you today?"
+          />
+          {/* Invisible barrier below input */}
+          <div 
+            className="absolute top-full left-0 w-full h-8 pointer-events-none"
+            style={{ backgroundColor: '#FAF9F5' }}
           />
         </div>
       </div>

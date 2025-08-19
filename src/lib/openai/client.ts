@@ -38,23 +38,23 @@ export function getOpenAIClient(): OpenAI {
         httpsProxy: httpsProxy ? '[configured]' : 'none'
       })
       
-      // Import HTTP agent for proxy support
-      const { HttpsProxyAgent } = require('https-proxy-agent')
       const proxyUrl = httpsProxy || httpProxy
       
-      // Create proxy agent with better configuration
-      const proxyAgent = new HttpsProxyAgent(proxyUrl, {
-        timeout: 60000, // 1 minute connection timeout
-        keepAlive: true,
-        keepAliveMsecs: 10000
-      })
+      // For OpenAI SDK v4+, we need to use fetch with proxy
+      const { ProxyAgent } = require('undici')
+      const proxyAgent = new ProxyAgent(proxyUrl)
       
-      // Set agent for both HTTP and HTTPS
-      clientOptions.httpAgent = proxyAgent
-      clientOptions.httpsAgent = proxyAgent
+      // Override the fetch implementation to use proxy
+      clientOptions.fetch = async (url: any, options: any = {}) => {
+        const { fetch } = require('undici')
+        return fetch(url, {
+          ...options,
+          dispatcher: proxyAgent
+        })
+      }
       
-      console.log('✅ Enhanced proxy agent configured for:', proxyUrl)
-      console.log('⏱️  Proxy settings: 60s connection timeout, keepAlive enabled')
+      console.log('✅ Enhanced proxy agent configured for OpenAI SDK v4+:', proxyUrl)
+      console.log('⏱️  Using undici ProxyAgent with fetch override')
     }
 
     openaiClient = new OpenAI(clientOptions)
@@ -96,13 +96,18 @@ export async function createChatCompletion(
 ): Promise<OpenAI.Chat.Completions.ChatCompletion> {
   const client = getOpenAIClient()
   
-  const params: OpenAI.Chat.Completions.ChatCompletionCreateParams = {
+  const params: any = {
     model: options.model || MODELS.GPT_5,
     messages,
-    temperature: options.temperature ?? 0.7,
-    max_tokens: options.maxTokens || 1500,
+    max_completion_tokens: options.maxTokens || 1500,
     stream: false, // Ensure we don't stream for this function
     user: options.userId, // For abuse detection and analytics
+  }
+  
+  // GPT-5 only supports default temperature (1), don't set it
+  const modelToUse = options.model || MODELS.GPT_5
+  if (modelToUse !== MODELS.GPT_5) {
+    params.temperature = options.temperature ?? 0.7
   }
   
   if (options.functions) {
@@ -141,13 +146,18 @@ export async function createStreamingCompletion(
 ): Promise<AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>> {
   const client = getOpenAIClient()
   
-  const params: OpenAI.Chat.Completions.ChatCompletionCreateParams = {
+  const params: any = {
     model: options.model || MODELS.GPT_5,
     messages,
-    temperature: options.temperature ?? 0.7,
-    max_tokens: options.maxTokens || 1500,
+    max_completion_tokens: options.maxTokens || 1500,
     stream: true,
     user: options.userId,
+  }
+  
+  // GPT-5 only supports default temperature (1), don't set it
+  const modelToUse = options.model || MODELS.GPT_5
+  if (modelToUse !== MODELS.GPT_5) {
+    params.temperature = options.temperature ?? 0.7
   }
   
   try {
@@ -211,7 +221,7 @@ export async function generateSummary(
   const client = getOpenAIClient()
 
   try {
-    const response = await client.chat.completions.create({
+    const params: any = {
       model,
       messages: [
         {
@@ -223,9 +233,15 @@ export async function generateSummary(
           content: `Please create a therapeutic summary of this content:\n\n${content}`
         }
       ],
-      max_tokens: Math.floor(maxLength / 2), // Rough estimate
-      temperature: 0.3 // Lower temperature for consistency
-    })
+      max_completion_tokens: Math.floor(maxLength / 2), // Rough estimate
+    }
+    
+    // GPT-5 only supports default temperature (1), don't set it
+    if (model !== MODELS.GPT_5) {
+      params.temperature = 0.3 // Lower temperature for consistency
+    }
+    
+    const response = await client.chat.completions.create(params)
 
     const summary = response.choices[0]?.message?.content?.trim() || ''
     return summary.length > maxLength 
@@ -263,7 +279,7 @@ export async function analyzeEmotionalContent(
   const client = getOpenAIClient()
 
   try {
-    const response = await client.chat.completions.create({
+    const params: any = {
       model,
       messages: [
         {
@@ -289,9 +305,15 @@ Sensitivity levels:
           content: `Analyze this content:\n\n${content}`
         }
       ],
-      max_tokens: 200,
-      temperature: 0.1
-    })
+      max_completion_tokens: 200,
+    }
+    
+    // GPT-5 only supports default temperature (1), don't set it
+    if (model !== MODELS.GPT_5) {
+      params.temperature = 0.1
+    }
+    
+    const response = await client.chat.completions.create(params)
 
     const result = response.choices[0]?.message?.content?.trim()
     if (result) {

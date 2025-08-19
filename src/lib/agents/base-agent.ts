@@ -143,13 +143,19 @@ export abstract class BaseAgent {
       const input = await this.prepareInput(context)
       const messages = await this.buildMessages(input, context)
       
-      const stream = await this.openai.chat.completions.create({
+      const params: any = {
         model: this.config.model!,
         messages,
-        temperature: this.config.temperature,
-        max_tokens: this.config.maxTokens,
+        max_completion_tokens: this.config.maxTokens,
         stream: true
-      })
+      }
+      
+      // GPT-5 only supports default temperature (1), don't set it
+      if (this.config.model !== 'gpt-5-2025-08-07') {
+        params.temperature = this.config.temperature
+      }
+      
+      const stream = await this.openai.chat.completions.create(params)
 
       let fullResponse = ''
       
@@ -240,13 +246,18 @@ export abstract class BaseAgent {
    * Make OpenAI API call
    */
   protected async callOpenAI(messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[]): Promise<string> {
-    const response = await this.openai.chat.completions.create({
+    const params: any = {
       model: this.config.model!,
       messages,
-      temperature: this.config.temperature,
-      max_tokens: this.config.maxTokens
-    })
+      max_completion_tokens: this.config.maxTokens
+    }
     
+    // GPT-5 only supports default temperature (1), don't set it
+    if (this.config.model !== 'gpt-5-2025-08-07') {
+      params.temperature = this.config.temperature
+    }
+    
+    const response = await this.openai.chat.completions.create(params)
     return response.choices[0]?.message?.content || ''
   }
 

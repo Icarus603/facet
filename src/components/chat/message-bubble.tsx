@@ -48,13 +48,11 @@ export function MessageBubble({ message, isOwn, showTimestamp = false, transpare
   }
 
   return (
-    <div className={cn(
-      "relative max-w-4xl",
-      isOwn ? "ml-auto" : "mr-auto"
-    )}>
+    <div className="flex justify-center w-full">
+      <div className="relative" style={{ width: '600px' }}>
       {/* User Message Bubble */}
       {isOwn ? (
-        <div className="ml-12">
+        <div className="w-full">
           <div className="bg-white border border-gray-200 rounded-2xl px-4 py-3 shadow-sm" style={{
             backgroundColor: 'var(--facet-blue-primary)',
             borderColor: 'var(--facet-blue-primary)'
@@ -71,7 +69,7 @@ export function MessageBubble({ message, isOwn, showTimestamp = false, transpare
         </div>
       ) : (
         /* FACET AI Team Message - Following SPECS.md design */
-        <div className="mr-12">
+        <div className="w-full">
           <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden" 
                style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
             {/* FACET AI Team Header */}
@@ -138,6 +136,7 @@ export function MessageBubble({ message, isOwn, showTimestamp = false, transpare
           )}
         </div>
       )}
+      </div>
     </div>
   )
 }

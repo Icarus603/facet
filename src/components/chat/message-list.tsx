@@ -25,9 +25,9 @@ export function MessageList({ messages, currentUserId, transparencyLevel = 'stan
         if (message.type === 'user') {
           // User message bubble with FACET styling
           return (
-            <div key={messageKey} className="flex justify-end">
-              <div className="max-w-xs sm:max-w-md text-white rounded-2xl px-4 py-3 shadow-sm"
-                   style={{ backgroundColor: 'var(--facet-blue-primary)' }}>
+            <div key={messageKey} className="flex justify-center">
+              <div className="text-white rounded-2xl px-4 py-3 shadow-sm" 
+                   style={{ backgroundColor: 'var(--facet-blue-primary)', width: '720px' }}>
                 <div className="text-sm leading-relaxed meslo-font">
                   {message.content}
                 </div>
@@ -47,8 +47,8 @@ export function MessageList({ messages, currentUserId, transparencyLevel = 'stan
               )}
               
               {/* Final Response Bubble */}
-              <div className="flex justify-start">
-                <div className="max-w-3xl bg-white border border-gray-200 rounded-2xl shadow-sm">
+              <div className="flex justify-center">
+                <div className="bg-white border border-gray-200 rounded-2xl shadow-sm" style={{ width: '720px' }}>
                   {/* Emergency/Risk Indicators */}
                   {message.metadata?.emergencyResponse?.emergencyDetected && (
                     <div className="mx-6 mt-4 mb-4 p-3 rounded-lg border"

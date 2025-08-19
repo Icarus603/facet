@@ -26,8 +26,8 @@ export function AITeamProcessingBubble({
   const confidenceLevel = avgConfidence >= 0.8 ? 'High' : avgConfidence >= 0.6 ? 'Good' : 'Moderate'
 
   return (
-    <div className={cn("flex justify-start", className)}>
-      <div className="w-96 bg-white border border-gray-200 rounded-2xl shadow-sm">
+    <div className="flex justify-center w-full">
+      <div className="bg-white border border-gray-200 rounded-2xl shadow-sm" style={{ width: '720px' }}>
         {/* Main Processing Bubble - Clickable Header */}
         <button
           onClick={() => setIsExpanded(!isExpanded)}

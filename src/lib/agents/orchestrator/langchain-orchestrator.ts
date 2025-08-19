@@ -148,11 +148,11 @@ export class FACETOrchestrator {
       const complexity = this.analyzeMessageComplexity(request.message)
       const scenario = quickCrisisCheck.urgencyLevel === 'crisis' ? 'crisis' : complexity
       
-      // FAST PATH: Skip heavy infrastructure for simple messages 
-      if (complexity === 'simple' && quickCrisisCheck.urgencyLevel === 'normal') {
-        console.log('FACET: Taking fast path for simple message:', request.message)
-        return this.processSimpleMessage(request, userId, messageId, conversationId, startTime)
-      }
+      // FAST PATH: Skip heavy infrastructure for simple messages (TEMPORARILY DISABLED FOR TESTING)
+      // if (complexity === 'simple' && quickCrisisCheck.urgencyLevel === 'normal') {
+      //   console.log('FACET: Taking fast path for simple message:', request.message)
+      //   return this.processSimpleMessage(request, userId, messageId, conversationId, startTime)
+      // }
       
       // Start performance monitoring
       performanceMonitor.startMonitoring(messageId, scenario)
@@ -169,8 +169,12 @@ export class FACETOrchestrator {
         executionPattern: 'sequential'
       })
       
-      // Check for cached user preferences
-      const cachedPreferences = await redisCache.getCachedUserPreferences(userId) || request.userPreferences
+      // Check for cached user preferences, but prioritize request preferences
+      const cachedPreferences = await redisCache.getCachedUserPreferences(userId)
+      const userPreferences = {
+        ...cachedPreferences,
+        ...request.userPreferences  // Request preferences override cache
+      }
       
       // Initialize learning context for this interaction
       const sessionId = conversationId || `session_${userId}_${Date.now()}`
@@ -188,7 +192,7 @@ export class FACETOrchestrator {
         userId,
         messageId,
         conversationId,
-        userPreferences: cachedPreferences,
+        userPreferences: userPreferences,
         urgencyLevel: quickCrisisCheck.urgencyLevel,
         personalizedConfigs,
         orchestrationLog: [],
@@ -196,15 +200,18 @@ export class FACETOrchestrator {
         startTime
       }
 
-      // Apply performance optimizations to timeout
-      const baseTimeoutMs = this.getSLATimeoutForRequest(request, quickCrisisCheck)
-      const optimizedTimeoutMs = Math.min(baseTimeoutMs, optimization.strategy.maxExecutionTime)
-      
-      // Execute workflow with caching and performance optimizations
-      const result = await Promise.race([
-        this.executeWithCachingAndMonitoring(initialState, optimization),
-        this.createTimeoutPromise(optimizedTimeoutMs, messageId)
-      ])
+      // Execute workflow with full agent pipeline (NO TIMEOUT) 
+      console.log('🔄 Starting full workflow execution with agent tracking...')
+      const result = await this.executeWithMonitoringOnly(initialState)
+      console.log('✅ Full workflow execution completed!')
+      console.log('🔍 Workflow result structure:', {
+        hasResult: !!result,
+        resultKeys: result ? Object.keys(result) : [],
+        hasAgentResults: !!result?.agentResults,
+        agentResultsCount: result?.agentResults?.length || 0,
+        hasFinalResponse: !!result?.finalResponse,
+        hasUserPreferences: !!result?.userPreferences
+      })
 
       // Calculate total processing time
       const processingTimeMs = Date.now() - startTime
@@ -1006,7 +1013,14 @@ export class FACETOrchestrator {
    * Build orchestration data for response
    */
   private buildOrchestrationData(state: FACETState, totalTimeMs: number): AgentOrchestrationData | null {
+    console.log('🔍 Building orchestration data:', {
+      hasUserPreferences: !!state.userPreferences,
+      agentVisibility: state.userPreferences?.agentVisibility,
+      agentResultsCount: state.agentResults?.length || 0
+    })
+    
     if (!state.userPreferences?.agentVisibility) {
+      console.log('❌ Orchestration data disabled - agentVisibility:', state.userPreferences?.agentVisibility)
       return null
     }
 
@@ -1438,8 +1452,8 @@ export class FACETOrchestrator {
       messagePreview: message.substring(0, 50) + '...'
     })
     
-    // Simple messages: short, few keywords
-    if (messageLength < 50 && emotionalCount <= 1 && therapyCount === 0) {
+    // Simple messages: very short, no keywords (更嚴格的判斷)
+    if (messageLength < 15 && emotionalCount === 0 && therapyCount === 0) {
       console.log('✅ Classified as: SIMPLE')
       return 'simple'
     }
@@ -1459,6 +1473,16 @@ export class FACETOrchestrator {
     return new Promise((_, reject) => {
       setTimeout(() => reject(new Error(`Orchestration timeout after ${timeoutMs}ms for message ${messageId}`)), timeoutMs)
     })
+  }
+
+  /**
+   * Execute workflow with monitoring but no timeout or caching (for debugging)
+   */
+  private async executeWithMonitoringOnly(state: FACETState): Promise<FACETState> {
+    console.log('🔍 Executing workflow with full monitoring...')
+    
+    // Use the orchestration workflow directly with full agent tracking
+    return await this.workflow.invoke(state)
   }
 
   private handleAgentError(state: FACETState, agentName: string, error: Error, startTime: number): Partial<FACETState> {
